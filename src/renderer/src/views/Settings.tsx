@@ -1,0 +1,332 @@
+import { useEffect, useState } from 'react'
+import type { CopilotModel, DeviceCodeInfo, Settings } from '../../../shared/types'
+
+interface Props {
+  settings: Settings | null
+  onChange: () => Promise<void> | void
+}
+
+export function SettingsView({ settings, onChange }: Props): JSX.Element {
+  const [adoOrg, setAdoOrg] = useState('')
+  const [adoProject, setAdoProject] = useState('')
+  const [adoRepo, setAdoRepo] = useState('')
+  const [pat, setPat] = useState('')
+  const [model, setModel] = useState('')
+  const [myIdentity, setMyIdentity] = useState('')
+  const [models, setModels] = useState<CopilotModel[]>([])
+  const [device, setDevice] = useState<DeviceCodeInfo | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [instructions, setInstructions] = useState('')
+  const [defaultInstructions, setDefaultInstructions] = useState('')
+  const [instructionsUsingDefault, setInstructionsUsingDefault] = useState(true)
+
+  useEffect(() => {
+    if (!settings) return
+    setAdoOrg(settings.adoOrg)
+    setAdoProject(settings.adoProject)
+    setAdoRepo(settings.adoRepo)
+    setModel(settings.model)
+    setMyIdentity(settings.myIdentity)
+  }, [settings])
+
+  useEffect(() => {
+    const unsub = window.api.onLoginStatus(async (s) => {
+      setDevice(null)
+      if (s.status === 'success') {
+        setMessage('Signed in to GitHub Copilot.')
+        setError(null)
+        await onChange()
+        await loadModels()
+      } else {
+        setError(s.error ?? 'Sign-in failed.')
+      }
+    })
+    return unsub
+  }, [onChange])
+
+  useEffect(() => {
+    if (settings?.copilotConnected) void loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.copilotConnected])
+
+  useEffect(() => {
+    void loadInstructions()
+  }, [])
+
+  async function loadInstructions(): Promise<void> {
+    const res = await window.api.getAgentInstructions()
+    if (res.ok) {
+      setInstructions(res.data.instructions)
+      setDefaultInstructions(res.data.defaultInstructions)
+      setInstructionsUsingDefault(res.data.isDefault)
+    }
+  }
+
+  async function saveInstructions(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    const res = await window.api.saveAgentInstructions(instructions)
+    setBusy(false)
+    if (res.ok) {
+      setInstructions(res.data.instructions)
+      setInstructionsUsingDefault(res.data.isDefault)
+      setMessage('Agent instructions saved.')
+    } else setError(res.error)
+  }
+
+  async function resetInstructions(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    const res = await window.api.saveAgentInstructions('')
+    setBusy(false)
+    if (res.ok) {
+      setInstructions(res.data.instructions)
+      setInstructionsUsingDefault(res.data.isDefault)
+      setMessage('Agent instructions reset to default.')
+    } else setError(res.error)
+  }
+
+  async function loadModels(): Promise<void> {
+    const res = await window.api.copilotListModels()
+    if (res.ok) setModels(res.data)
+    else setError(res.error)
+  }
+
+  async function saveAdo(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    const res = await window.api.saveSettings({ adoOrg, adoProject, adoRepo })
+    setBusy(false)
+    if (res.ok) {
+      setMessage('Azure DevOps settings saved.')
+      await onChange()
+    } else setError(res.error)
+  }
+
+  async function savePat(): Promise<void> {
+    if (!pat) return
+    setBusy(true)
+    const res = await window.api.setAdoPat(pat)
+    setBusy(false)
+    if (res.ok) {
+      setPat('')
+      setMessage('PAT saved securely.')
+      await onChange()
+    } else setError(res.error)
+  }
+
+  async function saveModel(next: string): Promise<void> {
+    setModel(next)
+    const res = await window.api.saveSettings({ model: next })
+    if (res.ok) await onChange()
+    else setError(res.error)
+  }
+
+  async function saveIdentity(): Promise<void> {
+    const res = await window.api.saveSettings({ myIdentity })
+    if (res.ok) {
+      setMessage('Saved your identity.')
+      await onChange()
+    } else setError(res.error)
+  }
+
+  async function detectIdentity(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    const res = await window.api.detectIdentity()
+    setBusy(false)
+    if (res.ok) {
+      setMyIdentity(res.data)
+      setMessage(`Detected: ${res.data}`)
+      await onChange()
+    } else setError(res.error)
+  }
+
+  async function startLogin(): Promise<void> {
+    setError(null)
+    setMessage(null)
+    const res = await window.api.copilotStartLogin()
+    if (res.ok) setDevice(res.data)
+    else setError(res.error)
+  }
+
+  async function signOut(): Promise<void> {
+    await window.api.copilotSignOut()
+    setModels([])
+    await onChange()
+  }
+
+  return (
+    <div className="settings">
+      <h1>Settings</h1>
+      {message && <div className="banner ok">{message}</div>}
+      {error && <div className="banner err">{error}</div>}
+
+      <section className="card">
+        <h2>GitHub Copilot</h2>
+        {settings?.copilotConnected ? (
+          <p className="row">
+            <span className="badge on">Connected</span>
+            <button className="btn" onClick={signOut}>
+              Sign out
+            </button>
+          </p>
+        ) : device ? (
+          <div className="device">
+            <p>
+              Go to{' '}
+              <a href={device.verificationUri} target="_blank" rel="noreferrer">
+                {device.verificationUri}
+              </a>{' '}
+              and enter this code:
+            </p>
+            <div className="code">{device.userCode}</div>
+            <p className="muted">Waiting for authorization…</p>
+            <button
+              className="btn"
+              onClick={async () => {
+                await window.api.copilotCancelLogin()
+                setDevice(null)
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button className="btn primary" onClick={startLogin}>
+            Sign in to GitHub Copilot
+          </button>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Model</h2>
+        <select
+          value={model}
+          disabled={!settings?.copilotConnected || models.length === 0}
+          onChange={(e) => saveModel(e.target.value)}
+        >
+          <option value="">Select a model…</option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.vendor})
+            </option>
+          ))}
+        </select>
+        {settings?.copilotConnected && (
+          <button className="btn" onClick={loadModels} style={{ marginLeft: 8 }}>
+            Refresh
+          </button>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Agent instructions</h2>
+        <p className="muted">
+          These instructions tell the review agent how to assess pull requests. The JSON
+          output format is fixed automatically, so you can edit freely.
+          {instructionsUsingDefault ? ' Currently using the default.' : ' Customized.'}
+        </p>
+        <textarea
+          className="instructions"
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          rows={12}
+          spellCheck={false}
+        />
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn primary" onClick={saveInstructions} disabled={busy}>
+            Save instructions
+          </button>
+          <button
+            className="btn"
+            onClick={resetInstructions}
+            disabled={busy || instructions.trim() === defaultInstructions.trim()}
+          >
+            Reset to default
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Azure DevOps</h2>
+        <label>
+          Organization
+          <input value={adoOrg} onChange={(e) => setAdoOrg(e.target.value)} placeholder="contoso" />
+        </label>
+        <label>
+          Project
+          <input
+            value={adoProject}
+            onChange={(e) => setAdoProject(e.target.value)}
+            placeholder="MyProject"
+          />
+        </label>
+        <label>
+          Repository
+          <input
+            value={adoRepo}
+            onChange={(e) => setAdoRepo(e.target.value)}
+            placeholder="my-repo"
+          />
+        </label>
+        <button className="btn primary" onClick={saveAdo} disabled={busy}>
+          Save Azure DevOps settings
+        </button>
+      </section>
+
+      <section className="card">
+        <h2>Your identity</h2>
+        <p className="muted">
+          Used to mark and filter your own pull requests. Detect it from Azure DevOps or
+          type your display name.
+        </p>
+        <label>
+          Your name
+          <input
+            value={myIdentity}
+            onChange={(e) => setMyIdentity(e.target.value)}
+            placeholder="e.g. Siobhan B"
+          />
+        </label>
+        <div className="row">
+          <button className="btn primary" onClick={saveIdentity} disabled={busy}>
+            Save
+          </button>
+          <button className="btn" onClick={detectIdentity} disabled={busy || !settings?.hasAdoPat}>
+            Detect from Azure DevOps
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Azure DevOps PAT</h2>
+        <p className="muted">
+          {settings?.hasAdoPat ? 'A PAT is stored securely.' : 'No PAT stored yet.'}
+        </p>
+        <label>
+          Personal Access Token
+          <input
+            type="password"
+            value={pat}
+            onChange={(e) => setPat(e.target.value)}
+            placeholder="Paste PAT (Code: Read; Pull Request: Read)"
+          />
+        </label>
+        <button className="btn primary" onClick={savePat} disabled={busy || !pat}>
+          Save PAT
+        </button>
+      </section>
+
+      <section className="card">
+        <h2>Diagnostics</h2>
+        <p className="muted">Open the log file to see review activity and errors.</p>
+        <button className="btn" onClick={() => window.api.openLogs()}>
+          Open logs
+        </button>
+      </section>
+    </div>
+  )
+}

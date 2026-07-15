@@ -1,0 +1,378 @@
+import { getDb } from './db'
+import type {
+  Comment,
+  Finding,
+  FindingBucket,
+  FindingStatus,
+  PullRequest,
+  Review,
+  ReviewStatus
+} from '../../shared/types'
+
+// ---- settings ----
+
+const DEFAULT_SETTINGS: Record<string, string> = {
+  adoOrg: '',
+  adoProject: '',
+  adoRepo: '',
+  model: ''
+}
+
+export function getSetting(key: string): string {
+  const db = getDb()
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined
+  return row?.value ?? DEFAULT_SETTINGS[key] ?? ''
+}
+
+export function setSetting(key: string, value: string): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT INTO settings(key, value) VALUES(?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value)
+}
+
+// ---- pull requests ----
+
+interface PrRow {
+  id: number
+  ado_pr_id: number
+  repo: string
+  title: string
+  description: string
+  author: string
+  status: string
+  url: string
+  source_branch: string
+  target_branch: string
+  head_commit: string
+  reviewed_commit: string | null
+  review_status: string
+  posted_comments: number | null
+  comment_replies: number | null
+  updated_at: string
+}
+
+function mapPr(row: PrRow): PullRequest {
+  return {
+    id: row.id,
+    adoPrId: row.ado_pr_id,
+    repo: row.repo,
+    title: row.title,
+    description: row.description ?? '',
+    author: row.author,
+    status: row.status,
+    url: row.url,
+    sourceBranch: row.source_branch,
+    targetBranch: row.target_branch,
+    headCommit: row.head_commit ?? '',
+    reviewedCommit: row.reviewed_commit ?? null,
+    reviewStatus: row.review_status as ReviewStatus,
+    postedComments: row.posted_comments ?? 0,
+    commentReplies: row.comment_replies ?? 0,
+    updatedAt: row.updated_at
+  }
+}
+
+export function upsertPullRequest(
+  pr: Omit<PullRequest, 'id' | 'reviewStatus' | 'reviewedCommit' | 'postedComments' | 'commentReplies'>
+): number {
+  const db = getDb()
+  const result = db
+    .prepare(
+      `INSERT INTO pull_requests
+         (ado_pr_id, repo, title, description, author, status, url, source_branch, target_branch, head_commit, updated_at, active)
+       VALUES (@adoPrId, @repo, @title, @description, @author, @status, @url, @sourceBranch, @targetBranch, @headCommit, @updatedAt, 1)
+       ON CONFLICT(ado_pr_id, repo) DO UPDATE SET
+         title = excluded.title,
+         description = excluded.description,
+         author = excluded.author,
+         status = excluded.status,
+         url = excluded.url,
+         source_branch = excluded.source_branch,
+         target_branch = excluded.target_branch,
+         head_commit = excluded.head_commit,
+         updated_at = excluded.updated_at,
+         active = 1`
+    )
+    .run(pr)
+  if (result.lastInsertRowid) return Number(result.lastInsertRowid)
+  const row = db
+    .prepare('SELECT id FROM pull_requests WHERE ado_pr_id = ? AND repo = ?')
+    .get(pr.adoPrId, pr.repo) as { id: number }
+  return row.id
+}
+
+const PR_SELECT = `
+  SELECT p.*,
+    (SELECT r.reviewed_commit FROM reviews r WHERE r.pr_id = p.id ORDER BY r.created_at DESC LIMIT 1) AS reviewed_commit,
+    (SELECT COUNT(*) FROM comments c
+       JOIN findings f ON f.id = c.finding_id
+       JOIN reviews r ON r.id = f.review_id
+       WHERE r.pr_id = p.id AND c.status = 'posted' AND c.ado_thread_id IS NOT NULL) AS posted_comments,
+    (SELECT COALESCE(SUM(c.reply_count), 0) FROM comments c
+       JOIN findings f ON f.id = c.finding_id
+       JOIN reviews r ON r.id = f.review_id
+       WHERE r.pr_id = p.id AND c.status = 'posted') AS comment_replies
+  FROM pull_requests p`
+
+export function listPullRequests(): PullRequest[] {
+  const db = getDb()
+  const rows = db
+    .prepare(`${PR_SELECT} WHERE p.active = 1 ORDER BY p.updated_at DESC`)
+    .all() as PrRow[]
+  return rows.map(mapPr)
+}
+
+/** Mark all PRs inactive; the next sync re-activates those still present. */
+export function markAllPullRequestsInactive(): void {
+  getDb().prepare('UPDATE pull_requests SET active = 0').run()
+}
+
+export function getPullRequest(id: number): PullRequest | null {
+  const db = getDb()
+  const row = db.prepare(`${PR_SELECT} WHERE p.id = ?`).get(id) as PrRow | undefined
+  return row ? mapPr(row) : null
+}
+
+export function setReviewStatus(prId: number, status: ReviewStatus): void {
+  getDb().prepare('UPDATE pull_requests SET review_status = ? WHERE id = ?').run(status, prId)
+}
+
+export function updatePullRequestDescription(prId: number, description: string): void {
+  getDb().prepare('UPDATE pull_requests SET description = ? WHERE id = ?').run(description, prId)
+}
+
+export function updatePullRequestHeadCommit(prId: number, commit: string): void {
+  getDb().prepare('UPDATE pull_requests SET head_commit = ? WHERE id = ?').run(commit, prId)
+}
+
+// ---- reviews & findings ----
+
+export interface NewFinding {
+  publicId: string
+  bucket: FindingBucket
+  title: string
+  description: string
+  filePath: string | null
+  line: number | null
+}
+
+export function createReview(
+  prId: number,
+  model: string,
+  findings: NewFinding[],
+  rawResponse: string,
+  reviewedCommit = ''
+): number {
+  const db = getDb()
+  const tx = db.transaction(() => {
+    // Replace any previous review for this PR so the latest wins.
+    db.prepare('DELETE FROM reviews WHERE pr_id = ?').run(prId)
+    const reviewId = Number(
+      db
+        .prepare(
+          `INSERT INTO reviews(pr_id, model, status, raw_response, reviewed_commit)
+           VALUES(?, ?, 'complete', ?, ?)`
+        )
+        .run(prId, model, rawResponse, reviewedCommit).lastInsertRowid
+    )
+    const insert = db.prepare(
+      `INSERT INTO findings(review_id, public_id, bucket, title, description, file_path, line)
+       VALUES(@reviewId, @publicId, @bucket, @title, @description, @filePath, @line)`
+    )
+    for (const f of findings) {
+      insert.run({ reviewId, ...f })
+    }
+    return reviewId
+  })
+  return tx()
+}
+
+interface FindingRow {
+  id: number
+  review_id: number
+  public_id: string
+  bucket: string
+  title: string
+  description: string
+  file_path: string | null
+  line: number | null
+  status: string
+  explanation: string | null
+}
+
+interface CommentRow {
+  id: number
+  finding_id: number
+  draft_text: string
+  status: string
+  posted_at: string | null
+  ado_thread_id: number | null
+  thread_status: string | null
+  reply_count: number | null
+  thread_replies: string | null
+}
+
+function mapComment(row: CommentRow): Comment {
+  let replies: Comment['replies'] = []
+  if (row.thread_replies) {
+    try {
+      replies = JSON.parse(row.thread_replies) as Comment['replies']
+    } catch {
+      replies = []
+    }
+  }
+  return {
+    id: row.id,
+    findingId: row.finding_id,
+    draftText: row.draft_text,
+    status: row.status as Comment['status'],
+    postedAt: row.posted_at,
+    adoThreadId: row.ado_thread_id,
+    threadStatus: row.thread_status ?? null,
+    replyCount: row.reply_count ?? 0,
+    replies
+  }
+}
+
+function mapFinding(row: FindingRow, comment: Comment | null): Finding {
+  return {
+    id: row.id,
+    reviewId: row.review_id,
+    publicId: row.public_id,
+    bucket: row.bucket as FindingBucket,
+    title: row.title,
+    description: row.description,
+    filePath: row.file_path,
+    line: row.line,
+    status: row.status as FindingStatus,
+    explanation: row.explanation,
+    comment
+  }
+}
+
+export function getReviewById(reviewId: number): { id: number; prId: number; reviewedCommit: string } | null {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT id, pr_id, reviewed_commit FROM reviews WHERE id = ?')
+    .get(reviewId) as { id: number; pr_id: number; reviewed_commit: string } | undefined
+  return row ? { id: row.id, prId: row.pr_id, reviewedCommit: row.reviewed_commit ?? '' } : null
+}
+
+export function getReviewForPr(prId: number): Review | null {
+  const db = getDb()
+  const review = db
+    .prepare('SELECT * FROM reviews WHERE pr_id = ? ORDER BY created_at DESC LIMIT 1')
+    .get(prId) as
+    | { id: number; pr_id: number; model: string; created_at: string; status: string }
+    | undefined
+  if (!review) return null
+
+  const findingRows = db
+    .prepare('SELECT * FROM findings WHERE review_id = ? ORDER BY id ASC')
+    .all(review.id) as FindingRow[]
+
+  const findings: Finding[] = findingRows.map((fr) => {
+    const commentRow = db
+      .prepare('SELECT * FROM comments WHERE finding_id = ?')
+      .get(fr.id) as CommentRow | undefined
+    return mapFinding(fr, commentRow ? mapComment(commentRow) : null)
+  })
+
+  return {
+    id: review.id,
+    prId: review.pr_id,
+    model: review.model,
+    createdAt: review.created_at,
+    status: review.status as Review['status'],
+    findings
+  }
+}
+
+export function getFinding(findingId: number): Finding | null {
+  const db = getDb()
+  const fr = db.prepare('SELECT * FROM findings WHERE id = ?').get(findingId) as
+    | FindingRow
+    | undefined
+  if (!fr) return null
+  const commentRow = db
+    .prepare('SELECT * FROM comments WHERE finding_id = ?')
+    .get(findingId) as CommentRow | undefined
+  return mapFinding(fr, commentRow ? mapComment(commentRow) : null)
+}
+
+export function setFindingStatus(findingId: number, status: FindingStatus): void {
+  getDb().prepare('UPDATE findings SET status = ? WHERE id = ?').run(status, findingId)
+}
+
+export function setFindingExplanation(findingId: number, explanation: string): void {
+  getDb()
+    .prepare('UPDATE findings SET explanation = ? WHERE id = ?')
+    .run(explanation, findingId)
+}
+
+export function upsertComment(findingId: number, draftText: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO comments(finding_id, draft_text, status) VALUES(?, ?, 'draft')
+       ON CONFLICT(finding_id) DO UPDATE SET draft_text = excluded.draft_text`
+    )
+    .run(findingId, draftText)
+}
+
+export function markCommentPosted(findingId: number, adoThreadId: number | null): void {
+  getDb()
+    .prepare(
+      `UPDATE comments SET status = 'posted', posted_at = datetime('now'), ado_thread_id = ?
+       WHERE finding_id = ?`
+    )
+    .run(adoThreadId, findingId)
+}
+
+/** All posted comments for a PR that have an Azure DevOps thread id. */
+export function getPostedCommentsForPr(
+  prId: number
+): Array<{ findingId: number; adoThreadId: number }> {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT c.finding_id AS findingId, c.ado_thread_id AS adoThreadId
+       FROM comments c
+       JOIN findings f ON f.id = c.finding_id
+       JOIN reviews r ON r.id = f.review_id
+       WHERE r.pr_id = ? AND c.status = 'posted' AND c.ado_thread_id IS NOT NULL`
+    )
+    .all(prId) as Array<{ findingId: number; adoThreadId: number }>
+  return rows
+}
+
+export function updateCommentThreadState(
+  findingId: number,
+  threadStatus: string | null,
+  replyCount: number,
+  replies: Array<{ author: string; text: string; date: string | null }> = []
+): void {
+  getDb()
+    .prepare(
+      'UPDATE comments SET thread_status = ?, reply_count = ?, thread_replies = ? WHERE finding_id = ?'
+    )
+    .run(threadStatus, replyCount, JSON.stringify(replies), findingId)
+}
+
+/** PR ids that have at least one posted comment thread. */
+export function getPrIdsWithPostedComments(): number[] {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT r.pr_id AS prId
+       FROM comments c
+       JOIN findings f ON f.id = c.finding_id
+       JOIN reviews r ON r.id = f.review_id
+       WHERE c.status = 'posted' AND c.ado_thread_id IS NOT NULL`
+    )
+    .all() as Array<{ prId: number }>
+  return rows.map((r) => r.prId)
+}
