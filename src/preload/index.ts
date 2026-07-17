@@ -9,14 +9,22 @@ import type {
   FileDiff,
   FindingStatus,
   IpcResult,
+  PostedComment,
+  PrAdoDetails,
   PullRequest,
   Review,
+  ReviewStatus,
   Settings
 } from '../shared/types'
 
 export interface ReviewProgress {
   prId: number
   message: string
+}
+
+export interface ReviewDone {
+  prId: number
+  status: 'reviewed' | 'error'
 }
 
 export interface LoginStatus {
@@ -56,12 +64,30 @@ const api = {
 
   // pull requests
   listPullRequests: (): Promise<IpcResult<PullRequest[]>> => ipcRenderer.invoke(IPC.prList),
+  listCachedPullRequests: (): Promise<IpcResult<PullRequest[]>> =>
+    ipcRenderer.invoke(IPC.prListCached),
   getPullRequest: (prId: number): Promise<IpcResult<PullRequest | null>> =>
     ipcRenderer.invoke(IPC.prGet, prId),
   getReview: (prId: number): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.prGetReview, prId),
+  setReviewStatus: (prId: number, status: ReviewStatus): Promise<IpcResult<PullRequest | null>> =>
+    ipcRenderer.invoke(IPC.prSetReviewStatus, prId, status),
+  getAdoDetails: (prId: number): Promise<IpcResult<PrAdoDetails | null>> =>
+    ipcRenderer.invoke(IPC.prGetAdoDetails, prId),
+  setVote: (prId: number, vote: number): Promise<IpcResult<PrAdoDetails | null>> =>
+    ipcRenderer.invoke(IPC.prSetVote, prId, vote),
+  setAdoStatus: (
+    prId: number,
+    status: 'active' | 'abandoned'
+  ): Promise<IpcResult<PrAdoDetails | null>> => ipcRenderer.invoke(IPC.prSetAdoStatus, prId, status),
+  setDraft: (prId: number, isDraft: boolean): Promise<IpcResult<PrAdoDetails | null>> =>
+    ipcRenderer.invoke(IPC.prSetDraft, prId, isDraft),
+  getPostedComments: (prId: number): Promise<IpcResult<PostedComment[]>> =>
+    ipcRenderer.invoke(IPC.prGetPostedComments, prId),
   explainPrDescription: (prId: number): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IPC.prExplainDescription, prId),
+  explainFileChange: (prId: number, path: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.prExplainFileChange, prId, path),
   refreshComments: (prId: number): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.prRefreshComments, prId),
   getChangedFiles: (prId: number): Promise<IpcResult<ChangedFile[]>> =>
@@ -74,6 +100,11 @@ const api = {
     const handler = (_e: unknown, payload: ReviewProgress): void => cb(payload)
     ipcRenderer.on(IPC.prReviewProgress, handler)
     return () => ipcRenderer.removeListener(IPC.prReviewProgress, handler)
+  },
+  onReviewDone: (cb: (p: ReviewDone) => void): (() => void) => {
+    const handler = (_e: unknown, payload: ReviewDone): void => cb(payload)
+    ipcRenderer.on(IPC.prReviewDone, handler)
+    return () => ipcRenderer.removeListener(IPC.prReviewDone, handler)
   },
 
   // findings

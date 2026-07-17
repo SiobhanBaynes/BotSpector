@@ -84,6 +84,56 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
   // v6 -> store the actual reply comments (JSON) for posted threads
   (db) => {
     db.exec(`ALTER TABLE comments ADD COLUMN thread_replies TEXT`)
+  },
+  // v7 -> track posted comments at the PR level so their Azure DevOps thread
+  // status and conversation survive re-reviews (which replace reviews/findings).
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS posted_comments (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id             INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+        ado_thread_id     INTEGER NOT NULL,
+        finding_public_id TEXT,
+        finding_title     TEXT,
+        bucket            TEXT,
+        comment_text      TEXT NOT NULL,
+        posted_at         TEXT,
+        thread_status     TEXT,
+        reply_count       INTEGER NOT NULL DEFAULT 0,
+        thread_replies    TEXT,
+        updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (pr_id, ado_thread_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_posted_comments_pr ON posted_comments(pr_id);
+    `)
+
+    // Backfill from any existing posted comments so history isn't lost on upgrade.
+    db.exec(`
+      INSERT OR IGNORE INTO posted_comments
+        (pr_id, ado_thread_id, finding_public_id, finding_title, bucket, comment_text,
+         posted_at, thread_status, reply_count, thread_replies)
+      SELECT r.pr_id, c.ado_thread_id, f.public_id, f.title, f.bucket, c.draft_text,
+             c.posted_at, c.thread_status, c.reply_count, c.thread_replies
+      FROM comments c
+      JOIN findings f ON f.id = c.finding_id
+      JOIN reviews r ON r.id = f.review_id
+      WHERE c.status = 'posted' AND c.ado_thread_id IS NOT NULL;
+    `)
+  },
+  // v8 -> cache Azure DevOps PR metadata for the list (draft flag, reviewer
+  // votes/approvals, and comment-thread count).
+  (db) => {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0`)
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN approvals INTEGER NOT NULL DEFAULT 0`)
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN reviewer_count INTEGER NOT NULL DEFAULT 0`)
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0`)
+  },
+  // v9 -> track unresolved (active) comment threads separately from the total
+  (db) => {
+    db.exec(
+      `ALTER TABLE pull_requests ADD COLUMN unresolved_comment_count INTEGER NOT NULL DEFAULT 0`
+    )
   }
 ]
 

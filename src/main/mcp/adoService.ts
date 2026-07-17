@@ -1,7 +1,7 @@
 import { buildArgs, callTool, findTool, parseJsonFromText } from './adoClient'
 import { getSetting } from '../db/repo'
 import { secrets } from '../secrets'
-import type { ChangedFile, PullRequest } from '../../shared/types'
+import type { ChangedFile, PrAdoDetails, PrReviewer, PullRequest } from '../../shared/types'
 
 /**
  * Higher-level Azure DevOps operations built on the MCP tools. These discover
@@ -58,6 +58,242 @@ export async function fetchCurrentUserDisplayName(): Promise<string | null> {
   return user?.customDisplayName || user?.providerDisplayName || null
 }
 
+// Shared Azure DevOps REST config (org/project/repo + basic auth from the PAT).
+function restConfig(): { org: string; project: string; repo: string; auth: string } | null {
+  const org = getSetting('adoOrg')
+  const project = getSetting('adoProject')
+  const repo = getSetting('adoRepo')
+  const pat = secrets.getAdoPat()
+  if (!org || !repo || !pat) return null
+  return { org, project, repo, auth: Buffer.from(`:${pat}`, 'utf-8').toString('base64') }
+}
+
+/** The current user's Azure DevOps id (GUID), needed to cast a reviewer vote. */
+export async function fetchCurrentUserId(): Promise<string | null> {
+  const org = getSetting('adoOrg')
+  const pat = secrets.getAdoPat()
+  if (!org || !pat) return null
+  const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
+  const res = await fetch(`https://dev.azure.com/${org}/_apis/connectionData?api-version=7.1-preview`, {
+    headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) return null
+  const data = (await res.json()) as { authenticatedUser?: { id?: string } }
+  return data.authenticatedUser?.id ?? null
+}
+
+function prRestUrl(cfg: { org: string; project: string; repo: string }, adoPrId: number): string {
+  return (
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/pullrequests/${adoPrId}`
+  )
+}
+
+/** Count active (non-deleted, non-system) comment threads on a PR. */
+async function fetchActiveThreadCount(adoPrId: number): Promise<number> {
+  return (await fetchCommentCounts(adoPrId)).total
+}
+
+// A thread is "resolved" if it was closed out; anything else (active, pending,
+// or no status) counts as still open / unresolved.
+function isResolvedThreadStatus(status?: string): boolean {
+  switch ((status ?? '').toLowerCase()) {
+    case 'fixed':
+    case 'closed':
+    case 'wontfix':
+    case 'bydesign':
+      return true
+    default:
+      return false
+  }
+}
+
+/** Count a PR's comment threads: total (with real comments) and unresolved. */
+async function fetchCommentCounts(adoPrId: number): Promise<{ total: number; unresolved: number }> {
+  const cfg = restConfig()
+  if (!cfg) return { total: 0, unresolved: 0 }
+  const url = `${prRestUrl(cfg, adoPrId)}/threads?api-version=7.1`
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) return { total: 0, unresolved: 0 }
+  const data = (await res.json()) as {
+    value?: Array<{
+      status?: string
+      isDeleted?: boolean
+      comments?: Array<{ commentType?: string; isDeleted?: boolean }>
+    }>
+  }
+  const threads = (data.value ?? []).filter(
+    (t) =>
+      !t.isDeleted &&
+      (t.comments ?? []).some((c) => !c.isDeleted && c.commentType !== 'system')
+  )
+  const total = threads.length
+  const unresolved = threads.filter((t) => !isResolvedThreadStatus(t.status)).length
+  return { total, unresolved }
+}
+
+/** Count active comment threads (exported for list enrichment). */
+export async function fetchPullRequestCommentCount(adoPrId: number): Promise<number> {
+  return fetchActiveThreadCount(adoPrId)
+}
+
+/**
+ * Lightweight per-PR metadata for the list: draft flag, reviewer approvals/vote
+ * counts, and comment-thread count. Uses REST because the MCP list tool omits
+ * reviewer votes (which is why the approval count was always 0).
+ */
+export async function fetchPullRequestListMeta(adoPrId: number): Promise<{
+  isDraft: boolean
+  approvals: number
+  reviewerCount: number
+  commentCount: number
+  unresolvedCommentCount: number
+} | null> {
+  const cfg = restConfig()
+  if (!cfg) return null
+  const res = await fetch(`${prRestUrl(cfg, adoPrId)}?api-version=7.1`, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) return null
+  const data = (await res.json()) as {
+    isDraft?: boolean
+    reviewers?: Array<{ vote?: number }>
+  }
+  const reviewers = data.reviewers ?? []
+  const approvals = reviewers.filter((r) => (r.vote ?? 0) >= 5).length
+  const reviewerCount = reviewers.filter((r) => (r.vote ?? 0) !== 0).length
+  const counts = await fetchCommentCounts(adoPrId).catch(() => ({ total: 0, unresolved: 0 }))
+  return {
+    isDraft: !!data.isDraft,
+    approvals,
+    reviewerCount,
+    commentCount: counts.total,
+    unresolvedCommentCount: counts.unresolved
+  }
+}
+
+/** Fetch live Azure DevOps state for a PR: status, draft, reviewers, my vote. */
+export async function fetchPullRequestDetails(adoPrId: number): Promise<PrAdoDetails | null> {
+  const cfg = restConfig()
+  if (!cfg) return null
+  const res = await fetch(`${prRestUrl(cfg, adoPrId)}?api-version=7.1`, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) throw new Error(`Could not load PR details (${res.status})`)
+  const data = (await res.json()) as {
+    status?: string
+    isDraft?: boolean
+    reviewers?: Array<{ id?: string; displayName?: string; vote?: number; isRequired?: boolean }>
+  }
+  const reviewers: PrReviewer[] = (data.reviewers ?? [])
+    .filter((r) => r.id)
+    .map((r) => ({
+      id: r.id as string,
+      displayName: r.displayName ?? '',
+      vote: r.vote ?? 0,
+      isRequired: !!r.isRequired
+    }))
+  const myId = await fetchCurrentUserId().catch(() => null)
+  const myVote = myId ? (reviewers.find((r) => r.id === myId)?.vote ?? 0) : 0
+  const commentCount = await fetchActiveThreadCount(adoPrId).catch(() => 0)
+  return { status: data.status ?? 'active', isDraft: !!data.isDraft, reviewers, myVote, commentCount }
+}
+
+/** Cast (or reset) the current user's reviewer vote on a PR. */
+export async function setPullRequestVote(adoPrId: number, vote: number): Promise<void> {
+  const cfg = restConfig()
+  if (!cfg) throw new Error('Azure DevOps is not configured')
+  const userId = await fetchCurrentUserId()
+  if (!userId) throw new Error('Could not determine your Azure DevOps identity')
+  const url =
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/pullRequests/${adoPrId}/reviewers/${userId}?api-version=7.1`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Basic ${cfg.auth}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ vote })
+  })
+  if (!res.ok) throw new Error(`Could not set your vote (${res.status})`)
+}
+
+/** Set the PR lifecycle status (active = reactivate, abandoned = abandon). */
+export async function setPullRequestStatus(
+  adoPrId: number,
+  status: 'active' | 'abandoned'
+): Promise<void> {
+  const cfg = restConfig()
+  if (!cfg) throw new Error('Azure DevOps is not configured')
+  const res = await fetch(`${prRestUrl(cfg, adoPrId)}?api-version=7.1`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Basic ${cfg.auth}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ status })
+  })
+  if (!res.ok) throw new Error(`Could not update PR status (${res.status})`)
+}
+
+/** Toggle the PR's draft flag (true = mark draft, false = publish). */
+export async function setPullRequestDraft(adoPrId: number, isDraft: boolean): Promise<void> {
+  const cfg = restConfig()
+  if (!cfg) throw new Error('Azure DevOps is not configured')
+  const res = await fetch(`${prRestUrl(cfg, adoPrId)}?api-version=7.1`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Basic ${cfg.auth}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ isDraft })
+  })
+  if (!res.ok) throw new Error(`Could not update draft state (${res.status})`)
+}
+
+/**
+ * The commit range for *this PR's own changes*: the merge base (common ancestor
+ * with the target branch) as the base, and the latest source commit as the head.
+ * Using the merge base rather than the target-branch tip means the diff excludes
+ * changes from any PR this one is stacked on top of — matching the Azure DevOps
+ * "Files" view. Falls back to the last-merge commits if iterations are missing.
+ */
+export async function fetchPullRequestDiffRange(
+  adoPrId: number
+): Promise<{ base: string | null; head: string | null }> {
+  const cfg = restConfig()
+  if (cfg) {
+    try {
+      const res = await fetch(`${prRestUrl(cfg, adoPrId)}/iterations?api-version=7.1`, {
+        headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+      })
+      if (res.ok) {
+        const data = (await res.json()) as {
+          value?: Array<{
+            sourceRefCommit?: { commitId?: string }
+            commonRefCommit?: { commitId?: string }
+          }>
+        }
+        const iterations = data.value ?? []
+        const last = iterations[iterations.length - 1]
+        const base = last?.commonRefCommit?.commitId ?? null
+        const head = last?.sourceRefCommit?.commitId ?? null
+        if (base && head) return { base, head }
+      }
+    } catch {
+      // fall through to the merge-commit fallback
+    }
+  }
+  const commits = await fetchPullRequestMergeCommits(adoPrId)
+  return { base: commits?.target ?? null, head: commits?.source ?? null }
+}
+
 /**
  * List the files changed between two commits (base -> head) using the ADO REST
  * diffs API with the PAT. Used for the PR "Files" view.
@@ -106,7 +342,18 @@ export async function fetchChangedFiles(
 }
 
 export async function listPullRequests(): Promise<
-  Array<Omit<PullRequest, 'id' | 'reviewStatus' | 'reviewedCommit' | 'postedComments' | 'commentReplies'>>
+  Array<
+    Omit<
+      PullRequest,
+      | 'id'
+      | 'reviewStatus'
+      | 'reviewedCommit'
+      | 'postedComments'
+      | 'commentReplies'
+      | 'commentCount'
+      | 'unresolvedCommentCount'
+    >
+  >
 > {
   const org = getSetting('adoOrg')
   const project = getSetting('adoProject')
@@ -139,6 +386,9 @@ export async function listPullRequests(): Promise<
     const repository = (r.repository ?? {}) as AnyRecord
     const repoName = str(repository.name) || repo
     const lastMergeSourceCommit = (r.lastMergeSourceCommit ?? {}) as AnyRecord
+    const reviewers = Array.isArray(r.reviewers) ? (r.reviewers as AnyRecord[]) : []
+    const approvals = reviewers.filter((rv) => Number(rv.vote) >= 5).length
+    const reviewerCount = reviewers.filter((rv) => Number(rv.vote) !== 0).length
     return {
       adoPrId: prId,
       repo: repoName,
@@ -150,6 +400,9 @@ export async function listPullRequests(): Promise<
       sourceBranch: shortBranch(r.sourceRefName),
       targetBranch: shortBranch(r.targetRefName),
       headCommit: str(lastMergeSourceCommit.commitId),
+      isDraft: Boolean(r.isDraft),
+      approvals,
+      reviewerCount,
       updatedAt: str(r.creationDate) || new Date().toISOString()
     }
   })
@@ -423,52 +676,96 @@ export async function fetchPullRequestMergeCommits(
  * Gather a text description of the PR (metadata + changes/threads) for the agent.
  * Best-effort: pulls whatever detail tools are available.
  */
+/**
+ * Gather a compact description of the PR (metadata + changed-file list) for the
+ * agent's seed context. Deliberately avoids dumping raw diffs/file blobs — the
+ * agent pulls specific files via tools (which are size-capped) as needed. This
+ * keeps the very first request well under the model's prompt-token limit even
+ * for very large PRs.
+ */
+const MAX_CONTEXT_CHARS = 24000
+const MAX_DESCRIPTION_CHARS = 4000
+const MAX_LISTED_FILES = 300
+
 export async function getPullRequestContext(adoPrId: number): Promise<PrContext> {
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
+  const org = getSetting('adoOrg')
 
   const parts: string[] = []
 
+  // Tell the agent exactly which repo/project/PR it's on so it doesn't waste
+  // turns discovering them, and how to read files efficiently.
+  parts.push(
+    `You are reviewing pull request #${adoPrId} in repository "${repo}" ` +
+      `(project "${project}", organization "${org}").\n` +
+      `The changed files are listed below. Read the specific ones you need with the ` +
+      `file-content tool (pass repository "${repo}" and project "${project}"). ` +
+      `Do not fetch the entire PR diff at once.`
+  )
+
+  // Concise PR metadata parsed from the get tool (not the raw JSON dump).
   const getTool =
     (await findTool('pull_request', 'get')) ??
     (await findTool('get', 'pull_request')) ??
     (await findTool('pullrequest', 'get'))
   if (getTool) {
-    const args = buildArgs(getTool, {
-      project,
-      repositoryId: repo,
-      repository: repo,
-      repositoryNameOrId: repo,
-      pullRequestId: adoPrId,
-      pullRequestId_: adoPrId
-    })
     try {
-      parts.push('## Pull request details\n' + (await callTool(getTool.name, args)))
+      const args = buildArgs(getTool, {
+        project,
+        repositoryId: repo,
+        repository: repo,
+        repositoryNameOrId: repo,
+        pullRequestId: adoPrId,
+        pullRequestId_: adoPrId
+      })
+      const text = await callTool(getTool.name, args)
+      const parsed = parseJsonFromText(text)
+      const pr = (Array.isArray(parsed) ? parsed[0] : parsed) as AnyRecord | undefined
+      if (pr && (pr.title || pr.description)) {
+        const description = str(pr.description)
+        parts.push(
+          `## Pull request #${adoPrId}\n` +
+            `Title: ${str(pr.title)}\n` +
+            `Status: ${str(pr.status) || 'active'}\n` +
+            `Branch: ${shortBranch(pr.sourceRefName)} -> ${shortBranch(pr.targetRefName)}\n\n` +
+            `Description:\n${description.slice(0, MAX_DESCRIPTION_CHARS) || '(none)'}`
+        )
+      } else {
+        // Fallback: unknown shape — include a truncated slice of the raw text.
+        parts.push('## Pull request details\n' + text.slice(0, MAX_DESCRIPTION_CHARS))
+      }
     } catch (e) {
       parts.push(`(Could not fetch PR details: ${(e as Error).message})`)
     }
   }
 
-  // Changes / iterations / diffs, if such a tool exists.
-  const changesTool =
-    (await findTool('pull_request', 'change')) ??
-    (await findTool('pull_request', 'iteration')) ??
-    (await findTool('pull_request', 'commit'))
-  if (changesTool) {
-    const args = buildArgs(changesTool, {
-      project,
-      repositoryId: repo,
-      repository: repo,
-      repositoryNameOrId: repo,
-      pullRequestId: adoPrId,
-      top: 100
-    })
-    try {
-      parts.push('## Changes\n' + (await callTool(changesTool.name, args)))
-    } catch {
-      // optional
+  // A list of changed files (paths + change type) rather than full diffs. The
+  // agent reads the ones it cares about via the file-content tool on demand.
+  // Uses the PR's merge-base range so files from any stacked-on PR are excluded.
+  try {
+    const { base, head } = await fetchPullRequestDiffRange(adoPrId)
+    if (base && head) {
+      const files = await fetchChangedFiles(base, head)
+      if (files.length > 0) {
+        const listed = files
+          .slice(0, MAX_LISTED_FILES)
+          .map((f) => `- ${f.changeType}: ${f.path}`)
+          .join('\n')
+        const extra =
+          files.length > MAX_LISTED_FILES
+            ? `\n… and ${files.length - MAX_LISTED_FILES} more file(s)`
+            : ''
+        parts.push(`## Changed files (${files.length})\n${listed}${extra}`)
+      }
     }
+  } catch {
+    // optional — the agent can still list/read files via tools
   }
 
-  return { summary: parts.join('\n\n') }
+  let summary = parts.join('\n\n')
+  if (summary.length > MAX_CONTEXT_CHARS) {
+    summary = summary.slice(0, MAX_CONTEXT_CHARS) + '\n\n…(seed context truncated to fit the model)'
+  }
+  return { summary }
 }

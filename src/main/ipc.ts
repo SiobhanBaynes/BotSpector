@@ -10,8 +10,11 @@ import type {
   FileDiff,
   FindingStatus,
   IpcResult,
+  PostedComment,
+  PrAdoDetails,
   PullRequest,
   Review,
+  ReviewStatus,
   Settings
 } from '../shared/types'
 import { secrets } from './secrets'
@@ -23,7 +26,13 @@ import {
   fetchPullRequestDescription,
   fetchPullRequestHeadCommit,
   fetchPullRequestMergeCommits,
+  fetchPullRequestDiffRange,
   fetchPullRequestThreads,
+  fetchPullRequestDetails,
+  fetchPullRequestListMeta,
+  setPullRequestVote,
+  setPullRequestStatus,
+  setPullRequestDraft,
   fetchCurrentUserDisplayName,
   fetchChangedFiles,
   fetchFileContent,
@@ -33,6 +42,7 @@ import {
   DEFAULT_REVIEW_INSTRUCTIONS,
   draftComment,
   explainFinding,
+  explainFileChange,
   explainPullRequest,
   refineComment,
   reviewPullRequest
@@ -51,15 +61,24 @@ function fail(error: unknown): IpcResult<never> {
 async function syncCommentThreads(prId: number): Promise<void> {
   const pr = repo.getPullRequest(prId)
   if (!pr) return
-  const posted = repo.getPostedCommentsForPr(prId)
-  if (posted.length === 0) return
+  // Live comments belong to the current review's findings; durable comments are
+  // the PR-level history that survives re-reviews. Sync both from one fetch.
+  const live = repo.getPostedCommentsForPr(prId)
+  const durable = repo.listPostedComments(prId)
+  if (live.length === 0 && durable.length === 0) return
   const threads = await fetchPullRequestThreads(pr.adoPrId)
   const byId = new Map(threads.map((t) => [t.id, t]))
-  for (const c of posted) {
+  for (const c of live) {
     const t = byId.get(c.adoThreadId)
     if (!t) continue
     const replies = Math.max(0, t.commentCount - 1)
     repo.updateCommentThreadState(c.findingId, t.status, replies, t.replies)
+  }
+  for (const c of durable) {
+    const t = byId.get(c.adoThreadId)
+    if (!t) continue
+    const replies = Math.max(0, t.commentCount - 1)
+    repo.updatePostedCommentThreadState(prId, c.adoThreadId, t.status, replies, t.replies)
   }
 }
 
@@ -188,6 +207,16 @@ export function registerIpcHandlers(): void {
   )
 
   // ---- pull requests ----
+  ipcMain.handle(IPC.prListCached, (): IpcResult<PullRequest[]> => {
+    // Instant, local-only: return the last synced PRs from the DB without
+    // touching Azure DevOps. The renderer refreshes from ADO in the background.
+    try {
+      return ok(repo.listPullRequests())
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
   ipcMain.handle(IPC.prList, async (): Promise<IpcResult<PullRequest[]>> => {
     try {
       const prs = await listPullRequests()
@@ -204,6 +233,34 @@ export function registerIpcHandlers(): void {
           })
         }
       }
+      // Refresh the authoritative head commit for already-reviewed PRs so the
+      // list can flag those that changed since review. The list tool's commit
+      // field is unreliable, so use the same per-PR source the reviewer uses.
+      for (const pr of repo.listPullRequests()) {
+        if (pr.reviewStatus !== 'reviewed' && pr.reviewStatus !== 'in_progress') continue
+        try {
+          const head = await fetchPullRequestHeadCommit(pr.adoPrId)
+          if (head && head !== pr.headCommit) repo.updatePullRequestHeadCommit(pr.id, head)
+        } catch (e) {
+          logger.warn(`could not refresh head commit for pr id ${pr.id}`, {
+            error: (e as Error).message
+          })
+        }
+      }
+      // Enrich the list with live Azure DevOps metadata (draft, reviewer
+      // approvals/votes, comment count) — the MCP list omits reviewer votes.
+      await Promise.all(
+        repo.listPullRequests().map(async (pr) => {
+          try {
+            const meta = await fetchPullRequestListMeta(pr.adoPrId)
+            if (meta) repo.updatePrAdoMeta(pr.id, meta)
+          } catch (e) {
+            logger.warn(`could not fetch ADO metadata for pr id ${pr.id}`, {
+              error: (e as Error).message
+            })
+          }
+        })
+      )
       return ok(repo.listPullRequests())
     } catch (e) {
       return fail(e)
@@ -253,6 +310,99 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(
+    IPC.prSetReviewStatus,
+    (_e, prId: number, status: ReviewStatus): IpcResult<PullRequest | null> => {
+      try {
+        repo.setReviewStatus(prId, status)
+        return ok(repo.getPullRequest(prId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prGetAdoDetails,
+    async (_e, prId: number): Promise<IpcResult<PrAdoDetails | null>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) return ok(null)
+        const details = await fetchPullRequestDetails(pr.adoPrId)
+        if (details) repo.updatePrCommentCount(prId, details.commentCount)
+        return ok(details)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prSetVote,
+    async (_e, prId: number, vote: number): Promise<IpcResult<PrAdoDetails | null>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        await setPullRequestVote(pr.adoPrId, vote)
+        // Approving (or approving with suggestions) in ADO marks it reviewed here.
+        if (vote >= 5) repo.setReviewStatus(prId, 'reviewed')
+        logger.info(`set reviewer vote ${vote} on ADO PR #${pr.adoPrId}`)
+        return ok(await fetchPullRequestDetails(pr.adoPrId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prSetAdoStatus,
+    async (_e, prId: number, status: 'active' | 'abandoned'): Promise<IpcResult<PrAdoDetails | null>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        await setPullRequestStatus(pr.adoPrId, status)
+        logger.info(`set ADO status '${status}' on PR #${pr.adoPrId}`)
+        return ok(await fetchPullRequestDetails(pr.adoPrId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prSetDraft,
+    async (_e, prId: number, isDraft: boolean): Promise<IpcResult<PrAdoDetails | null>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        await setPullRequestDraft(pr.adoPrId, isDraft)
+        logger.info(`set draft=${isDraft} on ADO PR #${pr.adoPrId}`)
+        return ok(await fetchPullRequestDetails(pr.adoPrId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prGetPostedComments,
+    async (_e, prId: number): Promise<IpcResult<PostedComment[]>> => {
+      try {
+        // Best-effort refresh so thread status/conversation are current.
+        try {
+          await syncCommentThreads(prId)
+        } catch (e) {
+          logger.warn(`could not sync posted comments for pr id ${prId}`, {
+            error: (e as Error).message
+          })
+        }
+        return ok(repo.listPostedComments(prId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
     IPC.prRefreshComments,
     async (_e, prId: number): Promise<IpcResult<Review | null>> => {
       try {
@@ -281,16 +431,53 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(
+    IPC.prExplainFileChange,
+    async (_e, prId: number, path: string): Promise<IpcResult<string>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const model = repo.getSetting('model')
+        if (!model) throw new Error('No model selected. Choose one in Settings.')
+
+        const commits = await fetchPullRequestMergeCommits(pr.adoPrId)
+        const head = commits?.source || pr.headCommit || undefined
+        const base = commits?.target || undefined
+        const after =
+          (await fetchFileContent(path, { commit: head, branch: pr.sourceBranch }).catch(
+            () => null
+          )) ?? ''
+        const before = base
+          ? ((await fetchFileContent(path, { commit: base }).catch(() => null)) ?? '')
+          : ''
+
+        const diff = buildFileDiff(path, before, after)
+        if (diff.lines.length === 0) {
+          return ok('This file has no line changes to explain (metadata or rename only).')
+        }
+        const diffText = diff.lines
+          .filter((l) => l.kind !== 'gap')
+          .map((l) => (l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ' ') + l.text)
+          .join('\n')
+          .slice(0, 12000)
+
+        return ok(await explainFileChange(path, diffText, model))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
     IPC.prGetChangedFiles,
     async (_e, prId: number): Promise<IpcResult<ChangedFile[]>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
-        const commits = await fetchPullRequestMergeCommits(pr.adoPrId)
-        if (!commits?.source || !commits?.target) {
+        const { base, head } = await fetchPullRequestDiffRange(pr.adoPrId)
+        if (!base || !head) {
           throw new Error('Could not determine the PR base/head commits')
         }
-        const files = await fetchChangedFiles(commits.target, commits.source)
+        const files = await fetchChangedFiles(base, head)
         return ok(files)
       } catch (e) {
         return fail(e)
@@ -304,9 +491,9 @@ export function registerIpcHandlers(): void {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
-        const commits = await fetchPullRequestMergeCommits(pr.adoPrId)
-        const head = commits?.source || pr.headCommit || undefined
-        const base = commits?.target || undefined
+        const range = await fetchPullRequestDiffRange(pr.adoPrId)
+        const head = range.head || pr.headCommit || undefined
+        const base = range.base || undefined
 
         const after =
           (await fetchFileContent(path, { commit: head, branch: pr.sourceBranch }).catch(
@@ -331,6 +518,16 @@ export function registerIpcHandlers(): void {
       if (!model) throw new Error('No model selected. Choose one in Settings.')
       const instructions = repo.getSetting('reviewInstructions') || undefined
 
+      // Capture the current status/conversation of previously posted comments
+      // before this re-review replaces the old findings, so that history is kept.
+      try {
+        await syncCommentThreads(prId)
+      } catch (e) {
+        logger.warn(`could not sync comment threads before re-review for pr id ${prId}`, {
+          error: (e as Error).message
+        })
+      }
+
       repo.setReviewStatus(prId, 'reviewing')
       send(IPC.prReviewProgress, { prId, message: 'Starting review…' })
       logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}`)
@@ -349,21 +546,29 @@ export function registerIpcHandlers(): void {
         })
       }
 
-      const { findings, raw } = await reviewPullRequest(pr.adoPrId, model, instructions, (message) =>
-        send(IPC.prReviewProgress, { prId, message })
+      const { findings, raw } = await reviewPullRequest(
+        pr.adoPrId,
+        model,
+        instructions,
+        (message) => send(IPC.prReviewProgress, { prId, message }),
+        repo.listPostedComments(prId)
       )
       repo.createReview(prId, model, findings, raw, headCommit)
-      repo.setReviewStatus(prId, 'reviewed')
+      // A fresh review has untriaged (open) findings, so this lands as
+      // 'in_progress'; it only becomes 'reviewed' once every finding is handled.
+      repo.recomputeReviewStatus(prId)
       logger.info(
         `review completed for pr id ${prId}: ${findings.length} finding(s) at commit ${headCommit.slice(0, 8) || 'n/a'}`
       )
 
       const review = repo.getReviewForPr(prId)
       if (!review) throw new Error('Review was not saved')
+      send(IPC.prReviewDone, { prId, status: 'reviewed' })
       return ok(review)
     } catch (e) {
       repo.setReviewStatus(prId, 'error')
       logger.error(`review failed for pr id ${prId}`, { error: (e as Error).message })
+      send(IPC.prReviewDone, { prId, status: 'error' })
       return fail(e)
     }
   })
@@ -374,6 +579,9 @@ export function registerIpcHandlers(): void {
     (_e, findingId: number, status: FindingStatus): IpcResult<null> => {
       try {
         repo.setFindingStatus(findingId, status)
+        // Triaging a finding may complete (or re-open) the PR's review.
+        const prId = repo.getPrIdForFinding(findingId)
+        if (prId != null) repo.recomputeReviewStatus(prId)
         return ok(null)
       } catch (e) {
         return fail(e)
@@ -405,9 +613,9 @@ export function registerIpcHandlers(): void {
         const review = repo.getReviewById(finding.reviewId)
         const pr = review ? repo.getPullRequest(review.prId) : null
 
-        const commits = pr ? await fetchPullRequestMergeCommits(pr.adoPrId) : null
-        const headCommit = review?.reviewedCommit || commits?.source || pr?.headCommit || undefined
-        const baseCommit = commits?.target || undefined
+        const range = pr ? await fetchPullRequestDiffRange(pr.adoPrId) : null
+        const headCommit = review?.reviewedCommit || range?.head || pr?.headCommit || undefined
+        const baseCommit = range?.base || undefined
 
         // Fetch "after" (head) and "before" (base) versions of the file.
         const after =
@@ -487,7 +695,9 @@ export function registerIpcHandlers(): void {
       const pr = review ? repo.getPullRequest(review.prId) : null
       if (!pr) throw new Error('Could not find the pull request for this finding')
 
-      const body = `[${finding.publicId} · ${finding.bucket}] ${finding.comment.draftText}`
+      // Post only the comment text; the finding id/severity are tracked
+      // internally via the Azure DevOps thread id and never exposed in ADO.
+      const body = finding.comment.draftText
       logger.info(`posting comment for ${finding.publicId} to ADO PR #${pr.adoPrId}`)
       const threadId = await postPullRequestComment(
         pr.adoPrId,
@@ -497,6 +707,20 @@ export function registerIpcHandlers(): void {
       )
       repo.markCommentPosted(findingId, threadId)
       repo.setFindingStatus(findingId, 'posted')
+      // Posting responds to a finding, which may complete the PR's review.
+      repo.recomputeReviewStatus(pr.id)
+      // Track the posted comment at the PR level so its thread status and
+      // conversation survive future re-reviews (which replace findings).
+      if (threadId != null) {
+        repo.recordPostedComment({
+          prId: pr.id,
+          adoThreadId: threadId,
+          findingPublicId: finding.publicId,
+          findingTitle: finding.title,
+          bucket: finding.bucket,
+          commentText: finding.comment.draftText
+        })
+      }
       logger.info(`posted comment for ${finding.publicId} (thread ${threadId ?? 'n/a'})`)
       return ok(null)
     } catch (e) {

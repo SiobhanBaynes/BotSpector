@@ -22,15 +22,25 @@ export const IPC = {
 
   // Pull requests
   prList: 'pr:list',
+  prListCached: 'pr:listCached',
   prGet: 'pr:get',
   prGetReview: 'pr:getReview',
+  prGetPostedComments: 'pr:getPostedComments',
+  prSetReviewStatus: 'pr:setReviewStatus',
+  prGetAdoDetails: 'pr:getAdoDetails',
+  prSetVote: 'pr:setVote',
+  prSetAdoStatus: 'pr:setAdoStatus',
+  prSetDraft: 'pr:setDraft',
   prReview: 'pr:review',
   prExplainDescription: 'pr:explainDescription',
+  prExplainFileChange: 'pr:explainFileChange',
   prRefreshComments: 'pr:refreshComments',
   prGetChangedFiles: 'pr:getChangedFiles',
   prGetFileDiff: 'pr:getFileDiff',
   // main -> renderer progress event
   prReviewProgress: 'pr:reviewProgress',
+  // main -> renderer event fired when a review finishes (or errors)
+  prReviewDone: 'pr:reviewDone',
 
   // Findings
   findingSetStatus: 'finding:setStatus',

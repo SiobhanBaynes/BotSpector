@@ -5,14 +5,36 @@
   "main": "./out/main/index.js",
   "author": "GCAP",
   "license": "MIT",
+  "build": {
+    "appId": "com.gcap.botspector",
+    "productName": "BotSpector",
+    "directories": {
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development"
+    }
+  },
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node scripts/patch-electron-name.mjs && electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/patch-electron-name.mjs",
     "package": "electron-vite build && electron-builder"
   },
   "dependencies": {

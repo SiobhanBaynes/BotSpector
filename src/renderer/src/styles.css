@@ -288,6 +288,106 @@ a {
   justify-content: space-between;
   gap: 12px;
 }
+.review-status-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.status-select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+/* Azure DevOps state on the PR page */
+.ado-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ado-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ado-status-badge {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.ado-status-badge.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ado-status-badge.abandoned {
+  color: var(--err);
+  border-color: var(--err);
+}
+.ado-status-badge.completed {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.ado-status-badge.Draft,
+.ado-status-badge.draft {
+  color: var(--medium);
+  border-color: var(--medium);
+}
+/* PR list: ADO activity column + tags */
+.ado-activity {
+  white-space: nowrap;
+}
+.ado-stat {
+  margin-right: 8px;
+}
+.ado-tag {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+}
+.ado-tag.draft {
+  color: var(--medium);
+  border-color: var(--medium);
+}
+.row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+/* compact status dropdown attached to the review badge */
+.review-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mini-status-select {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 1px 2px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.mini-status-select:hover,
+.mini-status-select:focus {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-2);
+}
 .prlist-actions {
   display: flex;
   align-items: center;
@@ -300,6 +400,31 @@ a {
   font-size: 12.5px;
   color: var(--muted);
   cursor: pointer;
+}
+/* PR list filter bar */
+.pr-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+.filter-chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.filter-chip:hover {
+  color: var(--text);
+}
+.filter-chip.active {
+  background: rgba(76, 139, 245, 0.2);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .mine-badge {
   margin-left: 8px;
@@ -376,6 +501,10 @@ a {
 .review-badge.reviewing {
   background: rgba(76, 139, 245, 0.2);
   color: var(--accent);
+}
+.review-badge.in_progress {
+  background: rgba(227, 179, 65, 0.2);
+  color: var(--medium);
 }
 .review-badge.error {
   background: rgba(248, 81, 73, 0.2);
@@ -752,6 +881,11 @@ a {
   padding: 4px 8px;
   font-size: 12px;
 }
+.file-diff-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 0;
+}
 .finding-actions {
   display: flex;
   align-items: center;
@@ -761,6 +895,40 @@ a {
 }
 .finding-actions .spacer {
   flex: 1;
+}
+
+/* comments carried over from previous reviews */
+.prior-comments {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  background: var(--panel);
+}
+.prior-comments > h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.prior-comment {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+}
+.prior-comment:first-of-type {
+  border-top: none;
+}
+.prior-comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.prior-comment-title {
+  font-weight: 600;
+}
+.prior-comment-body {
+  white-space: pre-wrap;
+  margin-bottom: 6px;
 }
 
 /* misc */

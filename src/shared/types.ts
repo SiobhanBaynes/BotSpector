@@ -8,7 +8,7 @@ export type FindingStatus = 'open' | 'accepted' | 'dismissed' | 'posted'
 
 export type CommentStatus = 'draft' | 'posted'
 
-export type ReviewStatus = 'not_reviewed' | 'reviewing' | 'reviewed' | 'error'
+export type ReviewStatus = 'not_reviewed' | 'reviewing' | 'in_progress' | 'reviewed' | 'error'
 
 export interface Settings {
   adoOrg: string
@@ -36,7 +36,31 @@ export interface PullRequest {
   reviewStatus: ReviewStatus
   postedComments: number
   commentReplies: number
+  isDraft: boolean
+  approvals: number
+  reviewerCount: number
+  commentCount: number
+  unresolvedCommentCount: number
   updatedAt: string
+}
+
+// A reviewer on the Azure DevOps PR and their vote.
+// Vote values: 10 approved, 5 approved with suggestions, 0 no vote,
+// -5 waiting for author, -10 rejected.
+export interface PrReviewer {
+  id: string
+  displayName: string
+  vote: number
+  isRequired: boolean
+}
+
+// Live Azure DevOps state for a PR, fetched on demand for the detail page.
+export interface PrAdoDetails {
+  status: string
+  isDraft: boolean
+  reviewers: PrReviewer[]
+  myVote: number
+  commentCount: number
 }
 
 export interface Finding {
@@ -78,6 +102,23 @@ export interface Review {
   createdAt: string
   status: 'complete' | 'error'
   findings: Finding[]
+}
+
+// A comment we posted to Azure DevOps, tracked at the PR level so its thread
+// status and conversation survive re-reviews (which replace reviews/findings).
+export interface PostedComment {
+  id: number
+  prId: number
+  adoThreadId: number
+  findingPublicId: string | null
+  findingTitle: string | null
+  bucket: FindingBucket | null
+  commentText: string
+  postedAt: string | null
+  threadStatus: string | null
+  replyCount: number
+  replies: CommentReply[]
+  updatedAt: string | null
 }
 
 export interface CopilotModel {

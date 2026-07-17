@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { FindingStatus, PullRequest, Review } from '../../../shared/types'
+import type {
+  FindingStatus,
+  PostedComment,
+  PrAdoDetails,
+  PullRequest,
+  Review,
+  ReviewStatus
+} from '../../../shared/types'
 import { FINDING_BUCKETS } from '../../../shared/types'
 import { FindingCard } from '../components/FindingCard'
 import { FilesTab, type FileRequest } from './FilesTab'
@@ -15,6 +22,8 @@ type Tab = 'review' | 'files'
 export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
   const [review, setReview] = useState<Review | null>(null)
+  const [postedComments, setPostedComments] = useState<PostedComment[]>([])
+  const [adoDetails, setAdoDetails] = useState<PrAdoDetails | null>(null)
   const [reviewing, setReviewing] = useState(false)
   const [progress, setProgress] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
@@ -30,11 +39,13 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
   }, [])
 
   const load = useCallback(async () => {
-    const [prRes, reviewRes] = await Promise.all([
+    const [prRes, reviewRes, postedRes] = await Promise.all([
       window.api.getPullRequest(prId),
-      window.api.getReview(prId)
+      window.api.getReview(prId),
+      window.api.getPostedComments(prId)
     ])
     if (prRes.ok) setPr(prRes.data)
+    if (postedRes.ok) setPostedComments(postedRes.data)
     if (reviewRes.ok) {
       setReview(reviewRes.data)
       // If any comments were posted, refresh their thread status in the background.
@@ -52,12 +63,36 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
     void load()
   }, [load])
 
+  // Fetch live Azure DevOps state (status, draft, reviewer votes) separately so
+  // its network latency doesn't hold up the main review load.
+  useEffect(() => {
+    let active = true
+    void window.api.getAdoDetails(prId).then((res) => {
+      if (active && res.ok) setAdoDetails(res.data)
+    })
+    return () => {
+      active = false
+    }
+  }, [prId])
+
   useEffect(() => {
     const unsub = window.api.onReviewProgress((p) => {
       if (p.prId === prId) setProgress(p.message)
     })
     return unsub
   }, [prId])
+
+  // A review runs in the main process, so it keeps going even if we navigate
+  // away and remount. Listen for its completion to reload the finished review.
+  useEffect(() => {
+    const unsub = window.api.onReviewDone((p) => {
+      if (p.prId !== prId) return
+      setReviewing(false)
+      setProgress('')
+      void load()
+    })
+    return unsub
+  }, [prId, load])
 
   async function runReview(): Promise<void> {
     setReviewing(true)
@@ -76,6 +111,37 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
     const res = await window.api.explainPrDescription(prId)
     setExplaining(false)
     if (res.ok) setExplanation(res.data)
+    else setError(res.error)
+  }
+
+  async function changeStatus(status: ReviewStatus): Promise<void> {
+    setError(null)
+    const res = await window.api.setReviewStatus(prId, status)
+    if (res.ok) setPr(res.data)
+    else setError(res.error)
+  }
+
+  async function castVote(vote: number): Promise<void> {
+    setError(null)
+    const res = await window.api.setVote(prId, vote)
+    if (res.ok) {
+      setAdoDetails(res.data)
+      // Approving in ADO flips the BotSpector status to reviewed; reflect it.
+      void load()
+    } else setError(res.error)
+  }
+
+  async function changeAdoStatus(status: 'active' | 'abandoned'): Promise<void> {
+    setError(null)
+    const res = await window.api.setAdoStatus(prId, status)
+    if (res.ok) setAdoDetails(res.data)
+    else setError(res.error)
+  }
+
+  async function changeDraft(isDraft: boolean): Promise<void> {
+    setError(null)
+    const res = await window.api.setDraft(prId, isDraft)
+    if (res.ok) setAdoDetails(res.data)
     else setError(res.error)
   }
 
@@ -110,14 +176,51 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
     !!pr?.headCommit &&
     pr.reviewedCommit !== pr.headCommit
 
+  // Comments we posted in earlier reviews whose finding is no longer part of the
+  // current review (e.g. after a re-review). These would otherwise be invisible,
+  // so surface them with their Azure DevOps thread status and conversation.
+  const currentThreadIds = new Set(
+    allFindings.map((f) => f.comment?.adoThreadId).filter((id): id is number => id != null)
+  )
+  const priorComments = postedComments.filter((c) => !currentThreadIds.has(c.adoThreadId))
+
+  // Reflect an in-progress review even after remounting: the local flag is lost
+  // on navigation, but the PR's persisted status tells us it's still running.
+  const isReviewing = reviewing || pr?.reviewStatus === 'reviewing'
+
   return (
     <div className="review">
       <div className="review-header">
         <button className="btn" onClick={onBack}>
           ← Back
         </button>
-        <button className="btn primary" onClick={runReview} disabled={reviewing}>
-          {reviewing ? (
+        <div className="review-status-control">
+          <span className="muted small">Status</span>
+          {isReviewing ? (
+            <span className="review-badge reviewing">Reviewing…</span>
+          ) : (
+            <select
+              className="status-select"
+              value={
+                pr && ['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus)
+                  ? pr.reviewStatus
+                  : ''
+              }
+              onChange={(e) => void changeStatus(e.target.value as ReviewStatus)}
+            >
+              {pr && !['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus) && (
+                <option value="" disabled>
+                  {pr.reviewStatus === 'error' ? 'Error' : '—'}
+                </option>
+              )}
+              <option value="not_reviewed">Not reviewed</option>
+              <option value="in_progress">In progress</option>
+              <option value="reviewed">Reviewed</option>
+            </select>
+          )}
+        </div>
+        <button className="btn primary" onClick={runReview} disabled={isReviewing}>
+          {isReviewing ? (
             <>
               <span className="spinner" /> Reviewing…
             </>
@@ -148,6 +251,55 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
               Open in Azure DevOps
             </a>
           </div>
+
+          {adoDetails && (
+            <div className="ado-panel">
+              <div className="ado-panel-row">
+                <span className={`ado-status-badge ${adoDetails.status}`}>
+                  {adoDetails.isDraft ? 'Draft' : capitalize(adoDetails.status)}
+                </span>
+                <span className="muted small">
+                  {adoDetails.reviewers.filter((r) => r.vote >= 5).length} approved ·{' '}
+                  {adoDetails.commentCount} comment{adoDetails.commentCount === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="ado-panel-row">
+                <label className="muted small">My vote</label>
+                <select
+                  className="status-select"
+                  value={String(adoDetails.myVote)}
+                  onChange={(e) => void castVote(Number(e.target.value))}
+                >
+                  <option value="10">Approve</option>
+                  <option value="5">Approve with suggestions</option>
+                  <option value="0">No vote</option>
+                  <option value="-5">Wait for author</option>
+                  <option value="-10">Reject</option>
+                </select>
+                {adoDetails.status === 'active' && (
+                  <>
+                    {adoDetails.isDraft ? (
+                      <button className="btn" onClick={() => void changeDraft(false)}>
+                        Publish
+                      </button>
+                    ) : (
+                      <button className="btn" onClick={() => void changeDraft(true)}>
+                        Mark draft
+                      </button>
+                    )}
+                    <button className="btn" onClick={() => void changeAdoStatus('abandoned')}>
+                      Abandon
+                    </button>
+                  </>
+                )}
+                {adoDetails.status === 'abandoned' && (
+                  <button className="btn" onClick={() => void changeAdoStatus('active')}>
+                    Reactivate
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="pr-description-block">
             <div className="pr-description-head">
@@ -188,7 +340,7 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
         </button>
       </div>
 
-      {reviewing && (
+      {isReviewing && (
         <div className="banner info reviewing-banner">
           <span className="spinner" />
           <span>{progress || 'Working…'}</span>
@@ -201,7 +353,11 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
         <FilesTab prId={prId} request={fileRequest} />
       </div>
 
-      {tab === 'review' && !review && !reviewing && (
+      {tab === 'review' && priorComments.length > 0 && (
+        <PriorComments comments={priorComments} />
+      )}
+
+      {tab === 'review' && !review && !isReviewing && (
         <div className="empty">
           <p>BotSpector hasn’t snooped through this PR yet. Hit “Review this PR” and let me dig in. 🕵️</p>
         </div>
@@ -267,5 +423,87 @@ function FilterChip({
     <button className={active ? 'chip active' : 'chip'} onClick={onClick}>
       {label} <span className="chip-count">{count}</span>
     </button>
+  )
+}
+
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+// Map Azure DevOps comment-thread status values to friendly labels/styles.
+function threadStateLabel(status: string | null): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'active':
+      return 'Active'
+    case 'pending':
+      return 'Pending'
+    case 'fixed':
+      return 'Resolved'
+    case 'wontfix':
+      return "Won't fix"
+    case 'closed':
+      return 'Closed'
+    case 'bydesign':
+      return 'By design'
+    default:
+      return 'Open'
+  }
+}
+
+function threadStateClass(status: string | null): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'active':
+    case 'pending':
+      return 'open'
+    case 'fixed':
+    case 'closed':
+    case 'bydesign':
+      return 'resolved'
+    case 'wontfix':
+      return 'wontfix'
+    default:
+      return 'unknown'
+  }
+}
+
+function PriorComments({ comments }: { comments: PostedComment[] }): JSX.Element {
+  return (
+    <section className="prior-comments">
+      <h2>
+        Comments from previous reviews <span className="count">{comments.length}</span>
+      </h2>
+      <p className="muted small">
+        These were posted in an earlier review. Their status and discussion below are kept in sync
+        with Azure DevOps.
+      </p>
+      {comments.map((c) => (
+        <div key={c.id} className="prior-comment">
+          <div className="prior-comment-head">
+            {c.findingPublicId && <span className="mono">{c.findingPublicId}</span>}
+            {c.bucket && (
+              <span className={`review-badge bucket-tag-${c.bucket.toLowerCase()}`}>{c.bucket}</span>
+            )}
+            {c.findingTitle && <span className="prior-comment-title">{c.findingTitle}</span>}
+            <span className={`thread-pill ${threadStateClass(c.threadStatus)}`}>
+              {threadStateLabel(c.threadStatus)}
+            </span>
+          </div>
+          <div className="prior-comment-body">{c.commentText}</div>
+          {c.replies.length > 0 && (
+            <div className="replies">
+              {c.replies.map((r, i) => (
+                <div key={i} className="reply">
+                  <div className="reply-head small">
+                    <span className="reply-author">{r.author}</span>
+                    {r.date && <span className="muted"> · {new Date(r.date).toLocaleString()}</span>}
+                  </div>
+                  <div className="reply-text">{r.text}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
   )
 }

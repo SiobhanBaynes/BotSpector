@@ -4,7 +4,7 @@ import { callTool, listTools } from '../mcp/adoClient'
 import { getPullRequestContext } from '../mcp/adoService'
 import { logger } from '../logger'
 import { FINDING_BUCKETS } from '../../shared/types'
-import type { Finding } from '../../shared/types'
+import type { Finding, PostedComment } from '../../shared/types'
 import type { NewFinding } from '../db/repo'
 
 /**
@@ -26,8 +26,11 @@ Rules for your report:
 - Only report real, substantiated issues. Do not invent problems. An empty list is fine.`
 
 // The fixed output-format contract, always appended so edits can't break parsing.
-const OUTPUT_FORMAT_INSTRUCTIONS = `You have tools to read the pull request and its files from Azure DevOps. Use them to
-gather the context you need. When you are finished, respond with ONLY a JSON object of
+const OUTPUT_FORMAT_INSTRUCTIONS = `You have tools to read the pull request and its files from Azure DevOps. The
+changed files are already listed in the provided context — read the specific
+ones you need with the file-content tool. Do NOT try to fetch the entire pull
+request diff or all changes in one call; work file by file. When you are finished,
+respond with ONLY a JSON object of
 this exact shape (no prose, no markdown fences):
 {
   "findings": [
@@ -65,24 +68,83 @@ function normalizeBucket(raw: string): (typeof FINDING_BUCKETS)[number] {
   return match ?? 'Medium'
 }
 
+// Tools that return the entire PR at once are excluded: their payloads are
+// often >1M chars, get truncated to a useless fragment, and the model then
+// re-calls them and burns its whole turn budget. The changed-file list is
+// already in the seed context, and the model reads specifics via the
+// file-content tool.
+const EXCLUDED_TOOLS = [/pull_request_changes/i]
+
 async function mcpToolsAsDefinitions(): Promise<ToolDefinition[]> {
   const tools = await listTools()
-  return tools.map((t) => ({
-    name: t.name,
-    description: t.description.slice(0, 1024),
-    parameters: (t.inputSchema as Record<string, unknown>) ?? { type: 'object' }
-  }))
+  return tools
+    .filter((t) => !EXCLUDED_TOOLS.some((re) => re.test(t.name)))
+    .map((t) => ({
+      name: t.name,
+      description: t.description.slice(0, 1024),
+      parameters: (t.inputSchema as Record<string, unknown>) ?? { type: 'object' }
+    }))
 }
 
 export type ProgressFn = (message: string) => void
 
 const MAX_TOOL_ITERATIONS = 12
 
+// Per-tool-result cap appended to the transcript, so one huge tool response
+// can't blow past the model's prompt-token limit across turns.
+const MAX_TOOL_RESULT_CHARS = 12000
+
+// Turn an Azure DevOps comment-thread status into a plain-language resolution.
+function threadStatusLabel(status: string | null): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'fixed':
+      return 'resolved'
+    case 'closed':
+      return 'closed'
+    case 'wontfix':
+      return "won't fix"
+    case 'bydesign':
+      return 'by design'
+    case 'active':
+    case 'pending':
+      return 'still active / unresolved'
+    default:
+      return 'unknown'
+  }
+}
+
+// Build a context block describing comments posted in previous reviews so the
+// model can avoid re-raising already-resolved issues and factor in discussion.
+function buildPriorCommentsBlock(priorComments: PostedComment[]): string {
+  if (priorComments.length === 0) return ''
+  const entries = priorComments.map((c) => {
+    const header = `- [${c.findingPublicId ?? 'prev'} · ${c.bucket ?? 'n/a'}] ${
+      c.findingTitle ?? ''
+    }`.trim()
+    const status = `  Status on Azure DevOps: ${threadStatusLabel(c.threadStatus)}`
+    const comment = `  Comment we posted: ${c.commentText}`
+    const discussion =
+      c.replies.length > 0
+        ? '  Discussion:\n' + c.replies.map((r) => `    - ${r.author}: ${r.text}`).join('\n')
+        : '  Discussion: (no replies)'
+    return [header, status, comment, discussion].join('\n')
+  })
+  return (
+    `\n\nComments from previous reviews of this PR, with their current resolution status ` +
+    `and discussion. Take these into account: do NOT re-raise an issue that was already ` +
+    `resolved, closed, marked "won't fix", or "by design" unless the code has clearly ` +
+    `regressed. If an issue is still active/unresolved and remains valid, you may raise it ` +
+    `again. Consider the discussion when deciding.\n\n` +
+    entries.join('\n\n')
+  )
+}
+
 export async function reviewPullRequest(
   adoPrId: number,
   model: string,
   instructions?: string,
-  onProgress: ProgressFn = () => {}
+  onProgress: ProgressFn = () => {},
+  priorComments: PostedComment[] = []
 ): Promise<{ findings: NewFinding[]; raw: string }> {
   onProgress('Gathering pull request context…')
   const context = await getPullRequestContext(adoPrId)
@@ -94,7 +156,8 @@ export async function reviewPullRequest(
       role: 'user',
       content:
         `Review pull request #${adoPrId}. Here is the context already gathered.\n\n` +
-        `${context.summary || '(no details fetched; use tools to gather them)'}\n\n` +
+        `${context.summary || '(no details fetched; use tools to gather them)'}` +
+        `${buildPriorCommentsBlock(priorComments)}\n\n` +
         `Use the available Azure DevOps tools to inspect changed files as needed, then ` +
         `produce your JSON findings report.`
     }
@@ -131,7 +194,12 @@ export async function reviewPullRequest(
           role: 'tool',
           toolCallId: call.id,
           name: call.name,
-          content: toolResult.slice(0, 12000)
+          content:
+            toolResult.length > MAX_TOOL_RESULT_CHARS
+              ? toolResult.slice(0, MAX_TOOL_RESULT_CHARS) +
+                `\n\n[…truncated ${toolResult.length - MAX_TOOL_RESULT_CHARS} more characters. ` +
+                `Read specific files with the file-content tool instead of fetching everything at once.]`
+              : toolResult
         })
       }
       continue
@@ -145,7 +213,17 @@ export async function reviewPullRequest(
   }
 
   if (finalContent === null) {
-    throw new Error('The review did not complete (too many tool calls).')
+    // Ran out of tool iterations without a report. Rather than failing the whole
+    // review, force a final answer from what was already gathered.
+    onProgress('Compiling findings…')
+    messages.push({
+      role: 'user',
+      content:
+        'Stop calling tools. Based only on the information already gathered above, ' +
+        'produce your final JSON findings report now, in the required format.'
+    })
+    const finalResult = await complete({ model, messages })
+    finalContent = finalResult.content ?? ''
   }
 
   onProgress('Compiling findings…')
@@ -225,6 +303,32 @@ export async function explainPullRequest(description: string, model: string): Pr
       {
         role: 'user',
         content: `Explain this pull request description:\n\n${description}`
+      }
+    ]
+  })
+  return (result.content ?? '').trim()
+}
+
+export async function explainFileChange(
+  path: string,
+  diffText: string,
+  model: string
+): Promise<string> {
+  const result = await complete({
+    model,
+    temperature: 0.2,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You explain a single file\u2019s code change to a reviewer in plain, approachable ' +
+          'language. Summarize what changed and the likely intent and impact, in a short ' +
+          'paragraph or a few bullet points. Keep jargon minimal and define any needed terms ' +
+          'briefly. Do not restate the diff line by line.'
+      },
+      {
+        role: 'user',
+        content: `Explain the change to \`${path}\`:\n\n\`\`\`diff\n${diffText}\n\`\`\``
       }
     ]
   })

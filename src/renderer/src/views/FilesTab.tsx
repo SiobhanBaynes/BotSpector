@@ -22,6 +22,8 @@ export function FilesTab({ prId, request }: Props): JSX.Element {
   const [diffs, setDiffs] = useState<Record<string, FileDiff>>({})
   const [prefetched, setPrefetched] = useState(0)
   const [highlight, setHighlight] = useState<{ path: string; line: number | null } | null>(null)
+  const [explanations, setExplanations] = useState<Record<string, string>>({})
+  const [explaining, setExplaining] = useState<Record<string, boolean>>({})
   const fileRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   // Load the changed-file list as soon as this component mounts.
@@ -90,6 +92,15 @@ export function FilesTab({ prId, request }: Props): JSX.Element {
     if (!isOpen) await ensureDiff(path)
   }
 
+  async function explainChange(path: string): Promise<void> {
+    setExplaining((e) => ({ ...e, [path]: true }))
+    setError(null)
+    const res = await window.api.explainFileChange(prId, path)
+    setExplaining((e) => ({ ...e, [path]: false }))
+    if (res.ok) setExplanations((x) => ({ ...x, [path]: res.data }))
+    else setError(res.error)
+  }
+
   const prefetchDone = files.length > 0 && prefetched >= files.length
 
   return (
@@ -136,6 +147,21 @@ export function FilesTab({ prId, request }: Props): JSX.Element {
             </div>
             {open[f.path] && (
               <div className="file-diff">
+                <div className="file-diff-actions">
+                  <button
+                    className="btn small-btn"
+                    onClick={() => void explainChange(f.path)}
+                    disabled={!!explaining[f.path]}
+                  >
+                    {explaining[f.path] ? 'Explaining…' : 'Explain this change'}
+                  </button>
+                </div>
+                {explanations[f.path] && (
+                  <div className="explanation">
+                    <strong>In plain language</strong>
+                    <p>{explanations[f.path]}</p>
+                  </div>
+                )}
                 {!diff && (
                   <div className="muted small">
                     <span className="spinner" /> Loading diff…
