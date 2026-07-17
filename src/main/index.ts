@@ -5,6 +5,13 @@ import { registerIpcHandlers } from './ipc'
 import { getDb, closeDb } from './db/db'
 import { resetStuckReviews, recomputeAllReviewStatuses } from './db/repo'
 import { disconnect as disconnectMcp } from './mcp/adoClient'
+import { fixEnvPath } from './fixPath'
+
+// A GUI app launched from Finder/Dock gets a minimal PATH that omits Node
+// managers (nvm/fnm/Homebrew), which breaks spawning `npx` for the MCP server.
+// Restore the real shell PATH before anything tries to spawn a child process.
+// (Only needed for the packaged app; dev is launched from a terminal.)
+if (app.isPackaged) fixEnvPath()
 
 // Never let a broken stdout/stderr pipe (e.g. the launching terminal closed)
 // crash the app with an uncaught EIO/EPIPE error.
