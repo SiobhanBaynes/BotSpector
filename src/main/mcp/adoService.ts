@@ -201,6 +201,31 @@ export async function fetchPullRequestDetails(adoPrId: number): Promise<PrAdoDet
   return { status: data.status ?? 'active', isDraft: !!data.isDraft, reviewers, myVote, commentCount }
 }
 
+/** Add the current user as an optional (non-required) reviewer, if not already one. */
+export async function addSelfAsOptionalReviewer(adoPrId: number): Promise<void> {
+  const cfg = restConfig()
+  if (!cfg) return
+  const userId = await fetchCurrentUserId()
+  if (!userId) return
+  const url =
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/pullRequests/${adoPrId}/reviewers/${userId}?api-version=7.1`
+  const headers = {
+    Authorization: `Basic ${cfg.auth}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json'
+  }
+  // If we're already a reviewer, leave the entry (and any existing vote) alone.
+  const existing = await fetch(url, { headers }).catch(() => null)
+  if (existing && existing.ok) return
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ vote: 0, isRequired: false })
+  })
+  if (!res.ok) throw new Error(`Could not add you as a reviewer (${res.status})`)
+}
+
 /** Cast (or reset) the current user's reviewer vote on a PR. */
 export async function setPullRequestVote(adoPrId: number, vote: number): Promise<void> {
   const cfg = restConfig()

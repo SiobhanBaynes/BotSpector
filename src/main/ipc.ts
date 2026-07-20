@@ -31,6 +31,7 @@ import {
   fetchPullRequestDetails,
   fetchPullRequestListMeta,
   setPullRequestVote,
+  addSelfAsOptionalReviewer,
   setPullRequestStatus,
   setPullRequestDraft,
   fetchCurrentUserDisplayName,
@@ -531,6 +532,15 @@ export function registerIpcHandlers(): void {
       repo.setReviewStatus(prId, 'reviewing')
       send(IPC.prReviewProgress, { prId, message: 'Starting review…' })
       logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}`)
+
+      // Put ourselves on the PR as an optional reviewer so it's clear we're on it.
+      try {
+        await addSelfAsOptionalReviewer(pr.adoPrId)
+      } catch (e) {
+        logger.warn(`could not add self as reviewer for pr id ${prId}`, {
+          error: (e as Error).message
+        })
+      }
 
       // Capture the current head commit so we can detect later changes.
       let headCommit = pr.headCommit
