@@ -54,7 +54,23 @@ export async function ensureConnected(): Promise<Client> {
 
     const t = new StdioClientTransport({
       command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
-      args: ['-y', '@azure-devops/mcp', org, '-d', 'core', 'repositories', '-a', 'pat'],
+      args: [
+        '-y',
+        '@azure-devops/mcp',
+        org,
+        '-d',
+        'core',
+        'repositories',
+        'work',
+        'work-items',
+        'wiki',
+        'search',
+        'test-plans',
+        'pipelines',
+        'advanced-security',
+        '-a',
+        'pat'
+      ],
       env: {
         ...process.env,
         PERSONAL_ACCESS_TOKEN: encodePat(pat)
