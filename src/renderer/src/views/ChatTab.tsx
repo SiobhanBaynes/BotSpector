@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../../shared/types'
 
 interface Props {
@@ -94,7 +96,15 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
         {messages.map((m, i) => (
           <div key={i} className={`chat-msg ${m.role}`}>
             <div className="chat-role small muted">{m.role === 'user' ? 'You' : 'Assistant'}</div>
-            <div className="chat-bubble">{m.content}</div>
+            <div className="chat-bubble">
+              {m.role === 'assistant' ? (
+                <div className="markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                </div>
+              ) : (
+                m.content
+              )}
+            </div>
           </div>
         ))}
         {busy && (
