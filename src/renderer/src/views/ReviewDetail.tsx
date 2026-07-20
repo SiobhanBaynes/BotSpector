@@ -267,7 +267,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
               <span className="spinner" /> Reviewing…
             </>
           ) : review ? (
-            'Re-review'
+            'Review with this model'
           ) : (
             'Review this PR'
           )}

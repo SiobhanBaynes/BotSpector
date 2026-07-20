@@ -191,6 +191,19 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
       <div className="finding-top" onClick={() => setExpanded((v) => !v)}>
         <span className="finding-id mono">{finding.publicId}</span>
         <span className="finding-title">{finding.title}</span>
+        {finding.model && (
+          <span className="finding-model" title={`Raised by ${finding.model}`}>
+            {finding.model}
+          </span>
+        )}
+        {finding.contributors.length > 0 && (
+          <span
+            className="finding-model contributor"
+            title={`Also flagged by ${finding.contributors.join(', ')}`}
+          >
+            +{finding.contributors.length}
+          </span>
+        )}
         <span className={`status-pill ${finding.status}`}>{finding.status}</span>
         <button className="expander">{expanded ? '▾' : '▸'}</button>
       </div>

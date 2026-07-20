@@ -576,19 +576,24 @@ export function registerIpcHandlers(): void {
         })
       }
 
-      const { findings, raw } = await reviewPullRequest(
+      const { findings, additions, raw } = await reviewPullRequest(
         pr.adoPrId,
         model,
         instructions,
         (message) => send(IPC.prReviewProgress, { prId, message }),
-        repo.listPostedComments(prId)
+        repo.listPostedComments(prId),
+        // Existing findings raised by other models, so this agent can avoid
+        // duplicating them (and contribute to them instead).
+        (repo.getReviewForPr(prId)?.findings ?? []).filter((f) => f.model !== model)
       )
       repo.createReview(prId, model, findings, raw, headCommit)
+      // Merge this model's contributions into other agents' existing findings.
+      repo.applyContributions(prId, model, additions)
       // A fresh review has untriaged (open) findings, so this lands as
       // 'in_progress'; it only becomes 'reviewed' once every finding is handled.
       repo.recomputeReviewStatus(prId)
       logger.info(
-        `review completed for pr id ${prId}: ${findings.length} finding(s) at commit ${headCommit.slice(0, 8) || 'n/a'}`
+        `review completed for pr id ${prId}: ${findings.length} new finding(s), ${additions.length} contribution(s) at commit ${headCommit.slice(0, 8) || 'n/a'}`
       )
 
       const review = repo.getReviewForPr(prId)

@@ -352,6 +352,18 @@ export interface NewFinding {
   line: number | null
 }
 
+// A note from another model that agrees with / adds to an existing finding.
+export interface FindingContribution {
+  publicId: string
+  note: string
+}
+
+/**
+ * Store a model's review of a PR. Reviews accumulate per model: re-running the
+ * SAME model replaces only its own findings, while other models' findings (and
+ * their triage/comments) are left intact. New findings are given PR-unique
+ * public ids so they never collide with those raised by another agent.
+ */
 export function createReview(
   prId: number,
   model: string,
@@ -361,8 +373,8 @@ export function createReview(
 ): number {
   const db = getDb()
   const tx = db.transaction(() => {
-    // Replace any previous review for this PR so the latest wins.
-    db.prepare('DELETE FROM reviews WHERE pr_id = ?').run(prId)
+    // Replace only this model's previous review for the PR.
+    db.prepare('DELETE FROM reviews WHERE pr_id = ? AND model = ?').run(prId, model)
     const reviewId = Number(
       db
         .prepare(
@@ -371,16 +383,88 @@ export function createReview(
         )
         .run(prId, model, rawResponse, reviewedCommit).lastInsertRowid
     )
+
+    // Collect public ids already in use on this PR (from other models) so we can
+    // renumber any colliding new ids and keep them unique for the whole PR.
+    const usedRows = db
+      .prepare(
+        `SELECT f.public_id AS pid FROM findings f
+         JOIN reviews r ON r.id = f.review_id WHERE r.pr_id = ?`
+      )
+      .all(prId) as Array<{ pid: string }>
+    const used = new Set(usedRows.map((r) => r.pid))
+    let counter = 1
+    const nextId = (): string => {
+      let id = `F-${String(counter).padStart(3, '0')}`
+      while (used.has(id)) {
+        counter++
+        id = `F-${String(counter).padStart(3, '0')}`
+      }
+      used.add(id)
+      counter++
+      return id
+    }
+
     const insert = db.prepare(
-      `INSERT INTO findings(review_id, public_id, bucket, title, description, file_path, line)
-       VALUES(@reviewId, @publicId, @bucket, @title, @description, @filePath, @line)`
+      `INSERT INTO findings(review_id, public_id, bucket, title, description, file_path, line, model, contributors)
+       VALUES(@reviewId, @publicId, @bucket, @title, @description, @filePath, @line, @model, '[]')`
     )
     for (const f of findings) {
-      insert.run({ reviewId, ...f })
+      const publicId = f.publicId && !used.has(f.publicId) ? (used.add(f.publicId), f.publicId) : nextId()
+      insert.run({ reviewId, ...f, publicId, model })
     }
     return reviewId
   })
   return tx()
+}
+
+/**
+ * Record that other models contributed to existing findings (agreed with or
+ * added to them). Adds the contributing model to each finding's contributor list
+ * and appends its note to the description.
+ */
+export function applyContributions(
+  prId: number,
+  model: string,
+  contributions: FindingContribution[]
+): void {
+  if (contributions.length === 0) return
+  const db = getDb()
+  const tx = db.transaction(() => {
+    for (const c of contributions) {
+      const row = db
+        .prepare(
+          `SELECT f.id AS id, f.contributors AS contributors, f.description AS description
+           FROM findings f JOIN reviews r ON r.id = f.review_id
+           WHERE r.pr_id = ? AND f.public_id = ? LIMIT 1`
+        )
+        .get(prId, c.publicId) as
+        | { id: number; contributors: string | null; description: string }
+        | undefined
+      if (!row) continue
+      let contributors: string[] = []
+      try {
+        const parsed = JSON.parse(row.contributors ?? '[]')
+        if (Array.isArray(parsed)) contributors = parsed.filter((m): m is string => typeof m === 'string')
+      } catch {
+        contributors = []
+      }
+      // Already recorded this model's contribution (e.g. on a re-run) — skip so
+      // the note isn't appended twice.
+      if (contributors.includes(model)) continue
+      contributors.push(model)
+      const note = c.note.trim()
+      const description = note
+        ? `${row.description}\n\n[${model} also flagged this: ${note}]`
+        : row.description
+      db.prepare('UPDATE findings SET contributors = ?, description = ? WHERE id = ?').run(
+        JSON.stringify(contributors),
+        description,
+        row.id
+      )
+    }
+  })
+  tx()
 }
 
 interface FindingRow {
@@ -394,6 +478,8 @@ interface FindingRow {
   line: number | null
   status: string
   explanation: string | null
+  model: string | null
+  contributors: string | null
 }
 
 interface CommentRow {
@@ -431,6 +517,15 @@ function mapComment(row: CommentRow): Comment {
 }
 
 function mapFinding(row: FindingRow, comment: Comment | null): Finding {
+  let contributors: string[] = []
+  if (row.contributors) {
+    try {
+      const parsed = JSON.parse(row.contributors)
+      if (Array.isArray(parsed)) contributors = parsed.filter((m): m is string => typeof m === 'string')
+    } catch {
+      contributors = []
+    }
+  }
   return {
     id: row.id,
     reviewId: row.review_id,
@@ -442,7 +537,9 @@ function mapFinding(row: FindingRow, comment: Comment | null): Finding {
     line: row.line,
     status: row.status as FindingStatus,
     explanation: row.explanation,
-    comment
+    comment,
+    model: row.model ?? '',
+    contributors
   }
 }
 
@@ -456,6 +553,8 @@ export function getReviewById(reviewId: number): { id: number; prId: number; rev
 
 export function getReviewForPr(prId: number): Review | null {
   const db = getDb()
+  // The most recent review anchors the returned object's metadata, but we
+  // aggregate findings from every model that has reviewed this PR.
   const review = db
     .prepare('SELECT * FROM reviews WHERE pr_id = ? ORDER BY created_at DESC LIMIT 1')
     .get(prId) as
@@ -464,8 +563,13 @@ export function getReviewForPr(prId: number): Review | null {
   if (!review) return null
 
   const findingRows = db
-    .prepare('SELECT * FROM findings WHERE review_id = ? ORDER BY id ASC')
-    .all(review.id) as FindingRow[]
+    .prepare(
+      `SELECT f.* FROM findings f
+       JOIN reviews r ON r.id = f.review_id
+       WHERE r.pr_id = ?
+       ORDER BY f.id ASC`
+    )
+    .all(prId) as FindingRow[]
 
   const findings: Finding[] = findingRows.map((fr) => {
     const commentRow = db

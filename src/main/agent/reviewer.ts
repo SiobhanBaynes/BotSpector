@@ -11,7 +11,7 @@ import type {
   PostedComment,
   ResolutionAssessment
 } from '../../shared/types'
-import type { NewFinding } from '../db/repo'
+import type { FindingContribution, NewFinding } from '../db/repo'
 
 /**
  * The review agent: feeds a PR to the selected Copilot model with the Azure
@@ -48,8 +48,19 @@ this exact shape (no prose, no markdown fences):
       "file": "path/to/file or null",
       "line": 123
     }
+  ],
+  "additions": [
+    {
+      "id": "F-007",
+      "note": "what you'd add to this existing finding"
+    }
   ]
-}`
+}
+Put only genuinely NEW issues in "findings". If another agent already reported an
+issue (see "Existing findings" in the context), do NOT repeat it as a new finding.
+Instead, if you agree with it or have something to add, reference its existing id
+in "additions" with a short note. Omit "additions" (or use []) if you have nothing
+to add.`
 
 function buildSystemPrompt(instructions?: string): string {
   const guidance = (instructions ?? '').trim() || DEFAULT_REVIEW_INSTRUCTIONS
@@ -65,8 +76,14 @@ const findingSchema = z.object({
   line: z.number().nullable().optional()
 })
 
+const additionSchema = z.object({
+  id: z.string(),
+  note: z.string().optional()
+})
+
 const reportSchema = z.object({
-  findings: z.array(findingSchema)
+  findings: z.array(findingSchema),
+  additions: z.array(additionSchema).optional()
 })
 
 function normalizeBucket(raw: string): (typeof FINDING_BUCKETS)[number] {
@@ -145,13 +162,30 @@ function buildPriorCommentsBlock(priorComments: PostedComment[]): string {
   )
 }
 
+// Build a context block listing findings other models already raised on this PR,
+// so a new agent avoids duplicating them and can contribute to them instead.
+function buildExistingFindingsBlock(existingFindings: Finding[]): string {
+  if (existingFindings.length === 0) return ''
+  const entries = existingFindings.map((f) => {
+    const loc = f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ''})` : ''
+    return `- ${f.publicId} [${f.bucket}] raised by ${f.model || 'a prior agent'}${loc}: ${f.title}\n    ${f.description}`
+  })
+  return (
+    `\n\nExisting findings already raised on this PR by other agents. Do NOT repeat any ` +
+    `of these as new findings. If you agree with one or have something to add, reference ` +
+    `its id in "additions" instead. Only report genuinely new issues in "findings".\n\n` +
+    entries.join('\n')
+  )
+}
+
 export async function reviewPullRequest(
   adoPrId: number,
   model: string,
   instructions?: string,
   onProgress: ProgressFn = () => {},
-  priorComments: PostedComment[] = []
-): Promise<{ findings: NewFinding[]; raw: string }> {
+  priorComments: PostedComment[] = [],
+  existingFindings: Finding[] = []
+): Promise<{ findings: NewFinding[]; additions: FindingContribution[]; raw: string }> {
   onProgress('Gathering pull request context…')
   const context = await getPullRequestContext(adoPrId)
   const tools = await mcpToolsAsDefinitions()
@@ -163,7 +197,8 @@ export async function reviewPullRequest(
       content:
         `Review pull request #${adoPrId}. Here is the context already gathered.\n\n` +
         `${context.summary || '(no details fetched; use tools to gather them)'}` +
-        `${buildPriorCommentsBlock(priorComments)}\n\n` +
+        `${buildPriorCommentsBlock(priorComments)}` +
+        `${buildExistingFindingsBlock(existingFindings)}\n\n` +
         `Use the available Azure DevOps tools to inspect changed files as needed, then ` +
         `produce your JSON findings report.`
     }
@@ -233,11 +268,14 @@ export async function reviewPullRequest(
   }
 
   onProgress('Compiling findings…')
-  const findings = parseFindings(finalContent)
-  return { findings, raw: finalContent }
+  const { findings, additions } = parseReport(finalContent)
+  return { findings, additions, raw: finalContent }
 }
 
-function parseFindings(content: string): NewFinding[] {
+function parseReport(content: string): {
+  findings: NewFinding[]
+  additions: FindingContribution[]
+} {
   const jsonText = extractJsonObject(content)
   let parsed: unknown
   try {
@@ -250,7 +288,7 @@ function parseFindings(content: string): NewFinding[] {
     throw new Error('The model returned findings in an unexpected format.')
   }
 
-  return report.data.findings.map((f, idx) => ({
+  const findings = report.data.findings.map((f, idx) => ({
     publicId: f.id?.trim() || `F-${String(idx + 1).padStart(3, '0')}`,
     bucket: normalizeBucket(f.bucket),
     title: f.title.trim(),
@@ -258,6 +296,12 @@ function parseFindings(content: string): NewFinding[] {
     filePath: f.file?.trim() ? f.file.trim() : null,
     line: typeof f.line === 'number' ? f.line : null
   }))
+
+  const additions = (report.data.additions ?? [])
+    .map((a) => ({ publicId: a.id.trim(), note: (a.note ?? '').trim() }))
+    .filter((a) => a.publicId)
+
+  return { findings, additions }
 }
 
 function extractJsonObject(text: string): string {

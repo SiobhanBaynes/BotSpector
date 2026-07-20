@@ -152,6 +152,18 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
       );
       CREATE INDEX IF NOT EXISTS idx_chat_messages_pr ON chat_messages(pr_id, id);
     `)
+  },
+  // v12 -> tag each finding with the model that raised it and any models that
+  // later contributed to it, so multiple agents can review one PR.
+  (db) => {
+    db.exec(`ALTER TABLE findings ADD COLUMN model TEXT NOT NULL DEFAULT ''`)
+    db.exec(`ALTER TABLE findings ADD COLUMN contributors TEXT NOT NULL DEFAULT '[]'`)
+    // Backfill each existing finding's model from its parent review.
+    db.exec(`
+      UPDATE findings
+      SET model = COALESCE((SELECT r.model FROM reviews r WHERE r.id = findings.review_id), '')
+      WHERE model = ''
+    `)
   }
 ]
 

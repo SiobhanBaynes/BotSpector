@@ -911,6 +911,20 @@ a {
 .finding-title {
   flex: 1;
 }
+.finding-model {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(56, 139, 253, 0.15);
+  color: #6cb6ff;
+  border: 1px solid rgba(56, 139, 253, 0.35);
+  white-space: nowrap;
+}
+.finding-model.contributor {
+  background: rgba(163, 113, 247, 0.15);
+  color: #a371f7;
+  border-color: rgba(163, 113, 247, 0.35);
+}
 .status-pill {
   font-size: 11px;
   padding: 1px 8px;

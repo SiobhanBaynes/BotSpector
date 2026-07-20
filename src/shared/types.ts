@@ -83,6 +83,8 @@ export interface Finding {
   status: FindingStatus
   explanation: string | null
   comment: Comment | null
+  model: string
+  contributors: string[]
 }
 
 export interface CommentReply {
