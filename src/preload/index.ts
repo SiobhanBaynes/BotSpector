@@ -12,6 +12,7 @@ import type {
   PostedComment,
   PrAdoDetails,
   PullRequest,
+  ResolutionAssessment,
   Review,
   ReviewStatus,
   Settings
@@ -124,6 +125,11 @@ const api = {
     ipcRenderer.invoke(IPC.findingPostComment, findingId),
   setThreadStatus: (findingId: number, status: string): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.findingSetThreadStatus, findingId, status),
+  checkFindingResolved: (
+    findingId: number,
+    model?: string
+  ): Promise<IpcResult<ResolutionAssessment>> =>
+    ipcRenderer.invoke(IPC.findingCheckResolved, findingId, model),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)

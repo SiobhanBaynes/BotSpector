@@ -4,7 +4,7 @@ import { callTool, listTools } from '../mcp/adoClient'
 import { getPullRequestContext } from '../mcp/adoService'
 import { logger } from '../logger'
 import { FINDING_BUCKETS } from '../../shared/types'
-import type { Finding, PostedComment } from '../../shared/types'
+import type { CommentReply, Finding, PostedComment, ResolutionAssessment } from '../../shared/types'
 import type { NewFinding } from '../db/repo'
 
 /**
@@ -263,6 +263,59 @@ function extractJsonObject(text: string): string {
 }
 
 // ---- single-shot helpers for per-finding actions ----
+
+export async function assessFindingResolution(
+  input: {
+    finding: Finding
+    commentText: string
+    replies: CommentReply[]
+    codeText: string
+  },
+  model: string
+): Promise<ResolutionAssessment> {
+  const { finding, commentText, replies, codeText } = input
+  const conversation = replies.length
+    ? replies.map((r) => `${r.author}: ${r.text}`).join('\n\n')
+    : '(no replies)'
+  const result = await complete({
+    model,
+    temperature: 0.1,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You judge whether a code-review finding has been resolved. You are given the original ' +
+          'finding, the review comment we posted, the author\'s replies, and the current version of ' +
+          'the relevant code. Decide whether the finding is now resolved. Respond ONLY with a JSON ' +
+          'object of the form {"verdict": "resolved" | "unresolved" | "unclear", "explanation": "<one short paragraph>"}. ' +
+          'Use "resolved" only when the current code and/or the reply clearly address the finding. ' +
+          'Use "unclear" if the provided information is insufficient to decide.'
+      },
+      {
+        role: 'user',
+        content:
+          `Finding [${finding.bucket}] ${finding.title}\n` +
+          `${finding.description}\n` +
+          `File: ${finding.filePath ?? 'n/a'}${finding.line ? `:${finding.line}` : ''}\n\n` +
+          `Review comment we posted:\n${commentText}\n\n` +
+          `Author replies:\n${conversation}\n\n` +
+          `Current code around the finding:\n${codeText || '(unavailable)'}`
+      }
+    ]
+  })
+  const raw = extractJsonObject(result.content ?? '')
+  try {
+    const parsed = JSON.parse(raw) as Partial<ResolutionAssessment>
+    const verdict =
+      parsed.verdict === 'resolved' || parsed.verdict === 'unresolved'
+        ? parsed.verdict
+        : 'unclear'
+    const explanation = (parsed.explanation ?? '').trim()
+    return { verdict, explanation: explanation || 'No explanation provided.' }
+  } catch {
+    return { verdict: 'unclear', explanation: (result.content ?? '').trim() || 'Could not assess.' }
+  }
+}
 
 export async function explainFinding(finding: Finding, model: string): Promise<string> {
   const result = await complete({

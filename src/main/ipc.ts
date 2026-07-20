@@ -13,6 +13,7 @@ import type {
   PostedComment,
   PrAdoDetails,
   PullRequest,
+  ResolutionAssessment,
   Review,
   ReviewStatus,
   Settings
@@ -42,6 +43,7 @@ import {
 } from './mcp/adoService'
 import {
   DEFAULT_REVIEW_INSTRUCTIONS,
+  assessFindingResolution,
   draftComment,
   explainFinding,
   explainFileChange,
@@ -627,6 +629,59 @@ export function registerIpcHandlers(): void {
       return fail(e)
     }
   })
+
+  ipcMain.handle(
+    IPC.findingCheckResolved,
+    async (_e, findingId: number, modelArg?: string): Promise<IpcResult<ResolutionAssessment>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        if (!finding.comment) throw new Error('This finding has no posted comment to assess')
+        const model = resolveModel(modelArg)
+        const review = repo.getReviewById(finding.reviewId)
+        const pr = review ? repo.getPullRequest(review.prId) : null
+
+        // Pull the CURRENT (head) version of the file so the AI can see whether
+        // the latest commit addresses the finding — not the version we reviewed.
+        let codeText = ''
+        if (finding.filePath && pr) {
+          const range = await fetchPullRequestDiffRange(pr.adoPrId).catch(() => null)
+          const headCommit = range?.head || pr.headCommit || undefined
+          const baseCommit = range?.base || undefined
+          const after =
+            (await fetchFileContent(finding.filePath, {
+              commit: headCommit,
+              branch: pr.sourceBranch || undefined
+            }).catch(() => null)) ?? ''
+          const before = baseCommit
+            ? ((await fetchFileContent(finding.filePath, { commit: baseCommit }).catch(
+                () => null
+              )) ?? '')
+            : ''
+          const snippet = buildDiffSnippet(finding.filePath, before, after, finding.line)
+          codeText = snippet.lines
+            .map(
+              (ln) =>
+                `${ln.kind === 'add' ? '+' : ln.kind === 'del' ? '-' : ' '}${ln.text}`
+            )
+            .join('\n')
+        }
+
+        const assessment = await assessFindingResolution(
+          {
+            finding,
+            commentText: finding.comment.draftText,
+            replies: finding.comment.replies,
+            codeText
+          },
+          model
+        )
+        return ok(assessment)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
 
   ipcMain.handle(
     IPC.findingGetCode,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CodeSnippet, Finding, FindingStatus } from '../../../shared/types'
+import type { CodeSnippet, Finding, FindingStatus, ResolutionAssessment } from '../../../shared/types'
 
 interface Props {
   finding: Finding
@@ -76,6 +76,7 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
   const [commentText, setCommentText] = useState(finding.comment?.draftText ?? '')
   const [code, setCode] = useState<CodeSnippet | null>(null)
   const [showCode, setShowCode] = useState(false)
+  const [resolution, setResolution] = useState<ResolutionAssessment | null>(null)
 
   // Keep the editable text in sync when the underlying draft changes.
   useEffect(() => {
@@ -167,6 +168,14 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
       const res = await window.api.setThreadStatus(finding.id, status)
       if (!res.ok) throw new Error(res.error)
       await onChanged()
+    })
+  }
+
+  async function checkResolved(): Promise<void> {
+    await withBusy('resolve', async () => {
+      const res = await window.api.checkFindingResolved(finding.id, model)
+      if (!res.ok) throw new Error(res.error)
+      setResolution(res.data)
     })
   }
 
@@ -294,6 +303,31 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
                       </div>
                     ))}
                   </div>
+
+                  {finding.comment.replyCount > 0 && (
+                    <div className="resolution-check">
+                      <button
+                        className="btn subtle small-btn"
+                        onClick={checkResolved}
+                        disabled={busy !== null}
+                        title="Ask the AI whether the reply and latest commit resolve this finding"
+                      >
+                        {busy === 'resolve' ? 'Checking…' : 'Check if resolved'}
+                      </button>
+                      {resolution && (
+                        <div className={`resolution-result ${resolution.verdict}`}>
+                          <span className="resolution-verdict">
+                            {resolution.verdict === 'resolved'
+                              ? '✓ Looks resolved'
+                              : resolution.verdict === 'unresolved'
+                                ? '✕ Not resolved'
+                                : '? Unclear'}
+                          </span>
+                          <p className="resolution-explanation">{resolution.explanation}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <>

@@ -578,6 +578,40 @@ a {
   background: rgba(63, 185, 80, 0.2);
   color: #3fb950;
 }
+.resolution-check {
+  margin-top: 8px;
+}
+.resolution-result {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.resolution-result .resolution-verdict {
+  font-weight: 600;
+  font-size: 13px;
+}
+.resolution-result.resolved {
+  border-color: rgba(63, 185, 80, 0.5);
+}
+.resolution-result.resolved .resolution-verdict {
+  color: #3fb950;
+}
+.resolution-result.unresolved {
+  border-color: rgba(248, 81, 73, 0.5);
+}
+.resolution-result.unresolved .resolution-verdict {
+  color: var(--err);
+}
+.resolution-result.unclear .resolution-verdict {
+  color: var(--medium);
+}
+.resolution-explanation {
+  margin: 6px 0 0;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
 
 /* review detail */
 .review-meta {

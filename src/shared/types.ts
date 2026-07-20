@@ -135,6 +135,12 @@ export interface CopilotModel {
   vendor: string
 }
 
+// The AI's verdict on whether a posted finding has been resolved.
+export interface ResolutionAssessment {
+  verdict: 'resolved' | 'unresolved' | 'unclear'
+  explanation: string
+}
+
 export interface AgentInstructions {
   instructions: string
   isDefault: boolean
