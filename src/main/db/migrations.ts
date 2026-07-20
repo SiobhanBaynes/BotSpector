@@ -134,6 +134,11 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
     db.exec(
       `ALTER TABLE pull_requests ADD COLUMN unresolved_comment_count INTEGER NOT NULL DEFAULT 0`
     )
+  },
+  // v10 -> cache the current user's own reviewer vote so we can drop PRs we've
+  // already approved out of the review queue.
+  (db) => {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN my_vote INTEGER NOT NULL DEFAULT 0`)
   }
 ]
 

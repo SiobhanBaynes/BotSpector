@@ -69,7 +69,9 @@ function restConfig(): { org: string; project: string; repo: string; auth: strin
 }
 
 /** The current user's Azure DevOps id (GUID), needed to cast a reviewer vote. */
+let cachedUserId: string | null = null
 export async function fetchCurrentUserId(): Promise<string | null> {
+  if (cachedUserId) return cachedUserId
   const org = getSetting('adoOrg')
   const pat = secrets.getAdoPat()
   if (!org || !pat) return null
@@ -79,7 +81,8 @@ export async function fetchCurrentUserId(): Promise<string | null> {
   })
   if (!res.ok) return null
   const data = (await res.json()) as { authenticatedUser?: { id?: string } }
-  return data.authenticatedUser?.id ?? null
+  cachedUserId = data.authenticatedUser?.id ?? null
+  return cachedUserId
 }
 
 function prRestUrl(cfg: { org: string; project: string; repo: string }, adoPrId: number): string {
@@ -150,6 +153,7 @@ export async function fetchPullRequestListMeta(adoPrId: number): Promise<{
   reviewerCount: number
   commentCount: number
   unresolvedCommentCount: number
+  myVote: number
 } | null> {
   const cfg = restConfig()
   if (!cfg) return null
@@ -159,18 +163,21 @@ export async function fetchPullRequestListMeta(adoPrId: number): Promise<{
   if (!res.ok) return null
   const data = (await res.json()) as {
     isDraft?: boolean
-    reviewers?: Array<{ vote?: number }>
+    reviewers?: Array<{ id?: string; vote?: number }>
   }
   const reviewers = data.reviewers ?? []
   const approvals = reviewers.filter((r) => (r.vote ?? 0) >= 5).length
   const reviewerCount = reviewers.filter((r) => (r.vote ?? 0) !== 0).length
+  const myId = await fetchCurrentUserId().catch(() => null)
+  const myVote = myId ? (reviewers.find((r) => r.id === myId)?.vote ?? 0) : 0
   const counts = await fetchCommentCounts(adoPrId).catch(() => ({ total: 0, unresolved: 0 }))
   return {
     isDraft: !!data.isDraft,
     approvals,
     reviewerCount,
     commentCount: counts.total,
-    unresolvedCommentCount: counts.unresolved
+    unresolvedCommentCount: counts.unresolved,
+    myVote
   }
 }
 
@@ -415,6 +422,7 @@ export async function listPullRequests(): Promise<
       | 'commentReplies'
       | 'commentCount'
       | 'unresolvedCommentCount'
+      | 'myVote'
     >
   >
 > {

@@ -58,6 +58,7 @@ interface PrRow {
   reviewer_count: number | null
   comment_count: number | null
   unresolved_comment_count: number | null
+  my_vote: number | null
   updated_at: string
 }
 
@@ -83,6 +84,7 @@ function mapPr(row: PrRow): PullRequest {
     reviewerCount: row.reviewer_count ?? 0,
     commentCount: row.comment_count ?? 0,
     unresolvedCommentCount: row.unresolved_comment_count ?? 0,
+    myVote: row.my_vote ?? 0,
     updatedAt: row.updated_at
   }
 }
@@ -97,6 +99,7 @@ export function upsertPullRequest(
     | 'commentReplies'
     | 'commentCount'
     | 'unresolvedCommentCount'
+    | 'myVote'
   >
 ): number {
   const db = getDb()
@@ -142,12 +145,13 @@ export function updatePrAdoMeta(
     reviewerCount: number
     commentCount: number
     unresolvedCommentCount: number
+    myVote: number
   }
 ): void {
   getDb()
     .prepare(
       `UPDATE pull_requests
-       SET is_draft = ?, approvals = ?, reviewer_count = ?, comment_count = ?, unresolved_comment_count = ?
+       SET is_draft = ?, approvals = ?, reviewer_count = ?, comment_count = ?, unresolved_comment_count = ?, my_vote = ?
        WHERE id = ?`
     )
     .run(
@@ -156,6 +160,7 @@ export function updatePrAdoMeta(
       meta.reviewerCount,
       meta.commentCount,
       meta.unresolvedCommentCount,
+      meta.myVote,
       prId
     )
 }

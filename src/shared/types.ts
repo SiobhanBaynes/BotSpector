@@ -47,6 +47,7 @@ export interface PullRequest {
   reviewerCount: number
   commentCount: number
   unresolvedCommentCount: number
+  myVote: number
   updatedAt: string
 }
 

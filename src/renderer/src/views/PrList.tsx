@@ -166,7 +166,11 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   // oldest first; our own PRs are pulled out into their own section.
   const visible = prs.filter((pr) => matchesFilters(pr, filters, myIdentity))
   const mine = visible.filter((pr) => isMine(pr, myIdentity)).sort(byOldest)
-  const others = visible.filter((pr) => !isMine(pr, myIdentity))
+  // PRs we've already approved in Azure DevOps are done from our side, so keep
+  // them out of the actionable queue (ADO resets our vote if they change again).
+  const others = visible.filter(
+    (pr) => !isMine(pr, myIdentity) && pr.myVote < 5
+  )
   const needsReReview = others.filter(isStale).sort(byOldest)
   const reviewPending = others
     .filter((pr) => !isStale(pr) && pr.reviewStatus === 'review_pending')
