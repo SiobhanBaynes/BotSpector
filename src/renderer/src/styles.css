@@ -507,6 +507,36 @@ a {
   font-weight: 600;
   font-size: 12px;
 }
+/* Fixed column widths so every queue section's table lines up. */
+.queue-table {
+  table-layout: fixed;
+}
+.queue-table .col-num {
+  width: 72px;
+}
+.queue-table .col-author {
+  width: 140px;
+}
+.queue-table .col-branch {
+  width: 260px;
+}
+.queue-table .col-ado {
+  width: 120px;
+}
+.queue-table .col-review {
+  width: 200px;
+}
+.queue-table .col-actions {
+  width: 92px;
+}
+.queue-table td,
+.queue-table th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-table td.mono.small {
+  white-space: nowrap;
+}
 .mono {
   font-family: 'SF Mono', Menlo, monospace;
 }

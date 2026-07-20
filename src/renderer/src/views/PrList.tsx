@@ -268,21 +268,21 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           onStatus={changeStatus}
         />
       )}
-      {changedSinceReview.length > 0 && (
-        <PrSection
-          title="Changed since review"
-          hint="Changed, but still waiting on your comments to be addressed"
-          prs={changedSinceReview}
-          myIdentity={myIdentity}
-          onOpen={onOpen}
-          onStatus={changeStatus}
-        />
-      )}
       {reviewPending.length > 0 && (
         <PrSection
           title="Review pending"
           hint="AI reviewed — awaiting your triage"
           prs={reviewPending}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {changedSinceReview.length > 0 && (
+        <PrSection
+          title="Changed since review"
+          hint="Changed, but still waiting on your comments to be addressed"
+          prs={changedSinceReview}
           myIdentity={myIdentity}
           onOpen={onOpen}
           onStatus={changeStatus}
@@ -345,7 +345,16 @@ function PrSection({
         </h2>
         {hint && <span className="muted small">{hint}</span>}
       </div>
-      <table className="table">
+      <table className="table queue-table">
+        <colgroup>
+          <col className="col-num" />
+          <col className="col-title" />
+          <col className="col-author" />
+          <col className="col-branch" />
+          <col className="col-ado" />
+          <col className="col-review" />
+          <col className="col-actions" />
+        </colgroup>
         <thead>
           <tr>
             <th>#</th>
