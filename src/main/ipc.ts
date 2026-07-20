@@ -690,12 +690,14 @@ export function registerIpcHandlers(): void {
     async (
       _e,
       prId: number,
-      history: ChatMessage[],
+      message: string,
       modelArg?: string
     ): Promise<IpcResult<string>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
+        const text = message.trim()
+        if (!text) throw new Error('Message is empty')
         const model = resolveModel(modelArg)
         const review = repo.getReviewForPr(prId)
         const findingsSummary = (review?.findings ?? [])
@@ -705,16 +707,42 @@ export function registerIpcHandlers(): void {
           })
           .join('\n')
         const priorComments = repo.listPostedComments(prId)
+        const history: ChatMessage[] = [
+          ...repo.listChatMessages(prId),
+          { role: 'user', content: text }
+        ]
         const reply = await chatAboutPullRequest(
           { adoPrId: pr.adoPrId, findingsSummary, priorComments, history },
           model
         )
+        // Only persist once the turn succeeds, so a failed call leaves no orphan.
+        repo.addChatMessages(prId, [
+          { role: 'user', content: text },
+          { role: 'assistant', content: reply }
+        ])
         return ok(reply)
       } catch (e) {
         return fail(e)
       }
     }
   )
+
+  ipcMain.handle(IPC.prChatHistory, (_e, prId: number): IpcResult<ChatMessage[]> => {
+    try {
+      return ok(repo.listChatMessages(prId))
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  ipcMain.handle(IPC.prChatClear, (_e, prId: number): IpcResult<null> => {
+    try {
+      repo.clearChatMessages(prId)
+      return ok(null)
+    } catch (e) {
+      return fail(e)
+    }
+  })
 
   ipcMain.handle(
     IPC.findingGetCode,

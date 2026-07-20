@@ -53,6 +53,8 @@ export const IPC = {
   findingSetThreadStatus: 'finding:setThreadStatus',
   findingCheckResolved: 'finding:checkResolved',
   prChat: 'pr:chat',
+  prChatHistory: 'pr:chatHistory',
+  prChatClear: 'pr:chatClear',
 
   // Diagnostics
   logsOpen: 'logs:open'

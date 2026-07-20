@@ -133,9 +133,13 @@ const api = {
     ipcRenderer.invoke(IPC.findingCheckResolved, findingId, model),
   chatAboutPr: (
     prId: number,
-    history: ChatMessage[],
+    message: string,
     model?: string
-  ): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.prChat, prId, history, model),
+  ): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.prChat, prId, message, model),
+  getChatHistory: (prId: number): Promise<IpcResult<ChatMessage[]>> =>
+    ipcRenderer.invoke(IPC.prChatHistory, prId),
+  clearChat: (prId: number): Promise<IpcResult<null>> =>
+    ipcRenderer.invoke(IPC.prChatClear, prId),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)

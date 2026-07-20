@@ -139,6 +139,19 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
   // already approved out of the review queue.
   (db) => {
     db.exec(`ALTER TABLE pull_requests ADD COLUMN my_vote INTEGER NOT NULL DEFAULT 0`)
+  },
+  // v11 -> persist per-PR chat conversations (visible turns only).
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id      INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+        role       TEXT NOT NULL,
+        content    TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_pr ON chat_messages(pr_id, id);
+    `)
   }
 ]
 

@@ -1,5 +1,6 @@
 import { getDb } from './db'
 import type {
+  ChatMessage,
   Comment,
   Finding,
   FindingBucket,
@@ -651,4 +652,42 @@ export function listPostedComments(prId: number): PostedComment[] {
     .prepare('SELECT * FROM posted_comments WHERE pr_id = ? ORDER BY posted_at ASC, id ASC')
     .all(prId) as PostedCommentRow[]
   return rows.map(mapPostedComment)
+}
+
+// ---- per-PR chat ----
+
+// Cap how many visible turns we retain per PR so the table can't grow unbounded.
+const MAX_CHAT_MESSAGES = 200
+
+/** The persisted chat conversation for a PR, oldest first. */
+export function listChatMessages(prId: number): ChatMessage[] {
+  const rows = getDb()
+    .prepare('SELECT role, content FROM chat_messages WHERE pr_id = ? ORDER BY id ASC')
+    .all(prId) as Array<{ role: string; content: string }>
+  return rows.map((r) => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content }))
+}
+
+/** Append visible turns to a PR's chat and trim to the retention cap. */
+export function addChatMessages(prId: number, messages: ChatMessage[]): void {
+  if (messages.length === 0) return
+  const db = getDb()
+  const tx = db.transaction(() => {
+    const insert = db.prepare(
+      'INSERT INTO chat_messages(pr_id, role, content) VALUES(?, ?, ?)'
+    )
+    for (const m of messages) insert.run(prId, m.role, m.content)
+    // Keep only the most recent MAX_CHAT_MESSAGES rows for this PR.
+    db.prepare(
+      `DELETE FROM chat_messages
+       WHERE pr_id = ? AND id NOT IN (
+         SELECT id FROM chat_messages WHERE pr_id = ? ORDER BY id DESC LIMIT ?
+       )`
+    ).run(prId, prId, MAX_CHAT_MESSAGES)
+  })
+  tx()
+}
+
+/** Delete a PR's entire chat conversation. */
+export function clearChatMessages(prId: number): void {
+  getDb().prepare('DELETE FROM chat_messages WHERE pr_id = ?').run(prId)
 }

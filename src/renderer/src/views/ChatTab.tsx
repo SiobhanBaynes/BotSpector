@@ -13,11 +13,18 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Reset the conversation when switching to a different PR.
+  // Load the persisted conversation for this PR (and reset when it changes).
   useEffect(() => {
+    let cancelled = false
     setMessages([])
     setInput('')
     setError(null)
+    void window.api.getChatHistory(prId).then((res) => {
+      if (!cancelled && res.ok) setMessages(res.data)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [prId])
 
   // Keep the transcript scrolled to the latest message.
@@ -28,21 +35,30 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
   async function send(): Promise<void> {
     const text = input.trim()
     if (!text || busy) return
-    const history: ChatMessage[] = [...messages, { role: 'user', content: text }]
-    setMessages(history)
+    // Optimistically show the user's message; the server persists on success.
+    setMessages((m) => [...m, { role: 'user', content: text }])
     setInput('')
     setBusy(true)
     setError(null)
     try {
-      const res = await window.api.chatAboutPr(prId, history, model)
+      const res = await window.api.chatAboutPr(prId, text, model)
       if (!res.ok) throw new Error(res.error)
-      setMessages([...history, { role: 'assistant', content: res.data }])
+      setMessages((m) => [...m, { role: 'assistant', content: res.data }])
     } catch (e) {
       setError((e as Error).message)
-      // Roll back the optimistic user message's turn indicator; keep the message.
+      // The turn wasn't persisted, so roll back the optimistic message.
+      setMessages((m) => m.slice(0, -1))
+      setInput(text)
     } finally {
       setBusy(false)
     }
+  }
+
+  async function clear(): Promise<void> {
+    if (busy) return
+    const res = await window.api.clearChat(prId)
+    if (res.ok) setMessages([])
+    else setError(res.error)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
@@ -54,12 +70,25 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
 
   return (
     <div className="chat-tab">
+      <div className="chat-toolbar">
+        <span className="muted small">
+          Chat is saved with this PR. The assistant can read the PR&apos;s changed files on demand.
+        </span>
+        <span className="spacer" />
+        <button
+          className="btn subtle small-btn"
+          onClick={() => void clear()}
+          disabled={busy || messages.length === 0}
+        >
+          Clear chat
+        </button>
+      </div>
+
       <div className="chat-transcript" ref={scrollRef}>
         {messages.length === 0 && !busy && (
           <div className="chat-empty muted">
             Ask anything about this pull request — the review findings, a specific file, why a
-            change matters, or how to address a comment. The assistant can read the PR&apos;s
-            changed files on demand.
+            change matters, or how to address a comment.
           </div>
         )}
         {messages.map((m, i) => (

@@ -620,6 +620,13 @@ a {
   height: calc(100vh - 260px);
   min-height: 360px;
 }
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
 .chat-transcript {
   flex: 1;
   overflow-y: auto;
