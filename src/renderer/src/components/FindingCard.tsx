@@ -3,6 +3,7 @@ import type { CodeSnippet, Finding, FindingStatus } from '../../../shared/types'
 
 interface Props {
   finding: Finding
+  model: string
   onChanged: () => Promise<void> | void
   onOpenInFiles?: (path: string, line: number | null) => void
 }
@@ -58,7 +59,7 @@ function threadStateClass(status: string | null): string {
   }
 }
 
-export function FindingCard({ finding, onChanged, onOpenInFiles }: Props): JSX.Element {
+export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -94,7 +95,7 @@ export function FindingCard({ finding, onChanged, onOpenInFiles }: Props): JSX.E
   async function explain(): Promise<void> {
     await withBusy('explain', async () => {
       setExpanded(true)
-      const res = await window.api.explainFinding(finding.id)
+      const res = await window.api.explainFinding(finding.id, model)
       if (!res.ok) throw new Error(res.error)
       await onChanged()
     })
@@ -119,7 +120,7 @@ export function FindingCard({ finding, onChanged, onOpenInFiles }: Props): JSX.E
 
   async function draft(): Promise<void> {
     await withBusy('draft', async () => {
-      const res = await window.api.draftComment(finding.id)
+      const res = await window.api.draftComment(finding.id, model)
       if (!res.ok) throw new Error(res.error)
       setCommentText(res.data)
       await onChanged()
@@ -128,7 +129,7 @@ export function FindingCard({ finding, onChanged, onOpenInFiles }: Props): JSX.E
 
   async function refine(key: string, instruction: string): Promise<void> {
     await withBusy(`refine-${key}`, async () => {
-      const res = await window.api.refineComment(finding.id, instruction)
+      const res = await window.api.refineComment(finding.id, instruction, model)
       if (!res.ok) throw new Error(res.error)
       setCommentText(res.data)
       await onChanged()

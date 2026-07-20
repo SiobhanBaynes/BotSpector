@@ -10,11 +10,12 @@ export interface FileRequest {
 
 interface Props {
   prId: number
+  model: string
   /** External request to open (and scroll to) a specific file. */
   request?: FileRequest | null
 }
 
-export function FilesTab({ prId, request }: Props): JSX.Element {
+export function FilesTab({ prId, model, request }: Props): JSX.Element {
   const [files, setFiles] = useState<ChangedFile[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -95,7 +96,7 @@ export function FilesTab({ prId, request }: Props): JSX.Element {
   async function explainChange(path: string): Promise<void> {
     setExplaining((e) => ({ ...e, [path]: true }))
     setError(null)
-    const res = await window.api.explainFileChange(prId, path)
+    const res = await window.api.explainFileChange(prId, path, model)
     setExplaining((e) => ({ ...e, [path]: false }))
     if (res.ok) setExplanations((x) => ({ ...x, [path]: res.data }))
     else setError(res.error)

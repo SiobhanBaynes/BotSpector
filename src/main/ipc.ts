@@ -58,6 +58,13 @@ function fail(error: unknown): IpcResult<never> {
   return { ok: false, error: error instanceof Error ? error.message : String(error) }
 }
 
+// Use a per-call model override when provided, otherwise the Settings default.
+function resolveModel(override?: string): string {
+  const model = (override && override.trim()) || repo.getSetting('model')
+  if (!model) throw new Error('No model selected. Choose one in Settings.')
+  return model
+}
+
 // Refresh the Azure DevOps thread status/replies for a PR's posted comments.
 async function syncCommentThreads(prId: number): Promise<void> {
   const pr = repo.getPullRequest(prId)
@@ -417,13 +424,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.prExplainDescription,
-    async (_e, prId: number): Promise<IpcResult<string>> => {
+    async (_e, prId: number, modelArg?: string): Promise<IpcResult<string>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
         if (!pr.description.trim()) return ok('This pull request has no description.')
-        const model = repo.getSetting('model')
-        if (!model) throw new Error('No model selected. Choose one in Settings.')
+        const model = resolveModel(modelArg)
         return ok(await explainPullRequest(pr.description, model))
       } catch (e) {
         return fail(e)
@@ -433,12 +439,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.prExplainFileChange,
-    async (_e, prId: number, path: string): Promise<IpcResult<string>> => {
+    async (_e, prId: number, path: string, modelArg?: string): Promise<IpcResult<string>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
-        const model = repo.getSetting('model')
-        if (!model) throw new Error('No model selected. Choose one in Settings.')
+        const model = resolveModel(modelArg)
 
         const commits = await fetchPullRequestMergeCommits(pr.adoPrId)
         const head = commits?.source || pr.headCommit || undefined
@@ -511,12 +516,11 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(IPC.prReview, async (_e, prId: number): Promise<IpcResult<Review>> => {
+  ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string): Promise<IpcResult<Review>> => {
     try {
       const pr = repo.getPullRequest(prId)
       if (!pr) throw new Error('Pull request not found')
-      const model = repo.getSetting('model')
-      if (!model) throw new Error('No model selected. Choose one in Settings.')
+      const model = resolveModel(modelArg)
       const instructions = repo.getSetting('reviewInstructions') || undefined
 
       // Capture the current status/conversation of previously posted comments
@@ -599,11 +603,11 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(IPC.findingExplain, async (_e, findingId: number): Promise<IpcResult<string>> => {
+  ipcMain.handle(IPC.findingExplain, async (_e, findingId: number, modelArg?: string): Promise<IpcResult<string>> => {
     try {
       const finding = repo.getFinding(findingId)
       if (!finding) throw new Error('Finding not found')
-      const model = repo.getSetting('model')
+      const model = resolveModel(modelArg)
       const explanation = await explainFinding(finding, model)
       repo.setFindingExplanation(findingId, explanation)
       return ok(explanation)
@@ -649,11 +653,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.findingDraftComment,
-    async (_e, findingId: number): Promise<IpcResult<string>> => {
+    async (_e, findingId: number, modelArg?: string): Promise<IpcResult<string>> => {
       try {
         const finding = repo.getFinding(findingId)
         if (!finding) throw new Error('Finding not found')
-        const model = repo.getSetting('model')
+        const model = resolveModel(modelArg)
         const text = await draftComment(finding, model)
         repo.upsertComment(findingId, text)
         return ok(text)
@@ -665,12 +669,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.findingRefineComment,
-    async (_e, findingId: number, instruction: string): Promise<IpcResult<string>> => {
+    async (_e, findingId: number, instruction: string, modelArg?: string): Promise<IpcResult<string>> => {
       try {
         const finding = repo.getFinding(findingId)
         if (!finding) throw new Error('Finding not found')
         if (!finding.comment) throw new Error('Draft a comment before refining it')
-        const model = repo.getSetting('model')
+        const model = resolveModel(modelArg)
         const text = await refineComment(finding.comment.draftText, instruction, model)
         repo.upsertComment(findingId, text)
         return ok(text)

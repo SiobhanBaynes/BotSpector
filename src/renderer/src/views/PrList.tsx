@@ -54,6 +54,21 @@ function isMine(pr: PullRequest, myIdentity: string): boolean {
   return author === id || author.includes(id) || id.includes(author)
 }
 
+// A reviewed PR that has changed since we reviewed it (needs a re-review).
+function isStale(pr: PullRequest): boolean {
+  return (
+    (pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress') &&
+    !!pr.reviewedCommit &&
+    !!pr.headCommit &&
+    pr.reviewedCommit !== pr.headCommit
+  )
+}
+
+// Oldest first, by PR creation/update time.
+function byOldest(a: PullRequest, b: PullRequest): number {
+  return a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0
+}
+
 export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   const [prs, setPrs] = useState<PullRequest[]>([])
   const [loading, setLoading] = useState(false)
@@ -137,10 +152,18 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
     [refresh]
   )
 
+  // Build the review queue: PRs needing re-review first, then oldest first;
+  // our own PRs are pulled out into their own section.
+  const visible = prs.filter((pr) => matchesFilters(pr, filters, myIdentity))
+  const mine = visible.filter((pr) => isMine(pr, myIdentity)).sort(byOldest)
+  const others = visible.filter((pr) => !isMine(pr, myIdentity))
+  const needsReReview = others.filter(isStale).sort(byOldest)
+  const queue = others.filter((pr) => !isStale(pr)).sort(byOldest)
+
   return (
     <div className="prlist">
       <div className="prlist-header">
-        <h1>Pull requests</h1>
+        <h1>Review Queue</h1>
         <div className="prlist-actions">
           {lastRefreshed && (
             <span className="muted small">
@@ -187,12 +210,69 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
 
       {error && <div className="banner err">{error}</div>}
 
-      {!loading && !bgBusy && prs.length === 0 && !error && (
+      {!loading && !bgBusy && visible.length === 0 && !error && (
         <div className="empty">
-          <p>Nothing to spy on here 👀 — try Refresh, or double-check your Azure DevOps settings.</p>
+          <p>Nothing to review here 👀 — try Refresh, adjust the filters, or check your Azure DevOps settings.</p>
         </div>
       )}
 
+      {needsReReview.length > 0 && (
+        <PrSection
+          title="Needs re-review"
+          hint="Reviewed, but the PR changed since"
+          prs={needsReReview}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {queue.length > 0 && (
+        <PrSection
+          title="Review queue"
+          hint="Oldest first"
+          prs={queue}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {mine.length > 0 && (
+        <PrSection
+          title="Your pull requests"
+          hint="Raised by you"
+          prs={mine}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+    </div>
+  )
+}
+
+function PrSection({
+  title,
+  hint,
+  prs,
+  myIdentity,
+  onOpen,
+  onStatus
+}: {
+  title: string
+  hint?: string
+  prs: PullRequest[]
+  myIdentity: string
+  onOpen: (prId: number) => void
+  onStatus: (prId: number, status: ReviewStatus) => void
+}): JSX.Element {
+  return (
+    <section className="queue-section">
+      <div className="queue-section-head">
+        <h2>
+          {title} <span className="count">{prs.length}</span>
+        </h2>
+        {hint && <span className="muted small">{hint}</span>}
+      </div>
       <table className="table">
         <thead>
           <tr>
@@ -206,70 +286,68 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           </tr>
         </thead>
         <tbody>
-          {prs
-            .filter((pr) => matchesFilters(pr, filters, myIdentity))
-            .map((pr) => (
-              <tr key={pr.id}>
-                <td className="mono">{pr.adoPrId}</td>
-                <td>
-                  {pr.title}
-                  {pr.isDraft && <span className="ado-tag draft">Draft</span>}
-                  {isMine(pr, myIdentity) && <span className="mine-badge">Mine</span>}
-                </td>
-                <td>{pr.author}</td>
-                <td className="mono small">
-                  {pr.sourceBranch} → {pr.targetBranch}
-                </td>
-                <td className="small ado-activity">
-                  <span className="ado-stat" title="Unresolved / total comment threads">
-                    💬 {pr.unresolvedCommentCount} / {pr.commentCount}
-                  </span>
-                  <span
-                    className="ado-stat"
-                    title={`${pr.approvals} approved of ${pr.reviewerCount} who voted`}
+          {prs.map((pr) => (
+            <tr key={pr.id}>
+              <td className="mono">{pr.adoPrId}</td>
+              <td>
+                {pr.title}
+                {pr.isDraft && <span className="ado-tag draft">Draft</span>}
+                {isMine(pr, myIdentity) && <span className="mine-badge">Mine</span>}
+              </td>
+              <td>{pr.author}</td>
+              <td className="mono small">
+                {pr.sourceBranch} → {pr.targetBranch}
+              </td>
+              <td className="small ado-activity">
+                <span className="ado-stat" title="Unresolved / total comment threads">
+                  💬 {pr.unresolvedCommentCount} / {pr.commentCount}
+                </span>
+                <span
+                  className="ado-stat"
+                  title={`${pr.approvals} approved of ${pr.reviewerCount} who voted`}
+                >
+                  ✅ {pr.approvals}
+                </span>
+              </td>
+              <td>
+                <div className="review-cell">
+                  <ReviewBadge pr={pr} />
+                  <select
+                    className="mini-status-select"
+                    title="Set BotSpector review status"
+                    value={
+                      ['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus)
+                        ? pr.reviewStatus
+                        : ''
+                    }
+                    onChange={(e) => onStatus(pr.id, e.target.value as ReviewStatus)}
                   >
-                    ✅ {pr.approvals}
-                  </span>
-                </td>
-                <td>
-                  <div className="review-cell">
-                    <ReviewBadge pr={pr} />
-                    <select
-                      className="mini-status-select"
-                      title="Set BotSpector review status"
-                      value={
-                        ['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus)
-                          ? pr.reviewStatus
-                          : ''
-                      }
-                      onChange={(e) => void changeStatus(pr.id, e.target.value as ReviewStatus)}
-                    >
-                      {!['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus) && (
-                        <option value="" disabled>
-                          —
-                        </option>
-                      )}
-                      <option value="not_reviewed">Not reviewed</option>
-                      <option value="in_progress">In progress</option>
-                      <option value="reviewed">Reviewed</option>
-                    </select>
-                    {pr.commentReplies > 0 && (
-                      <span className="reply-badge" title="New replies on your posted comments">
-                        💬 {pr.commentReplies}
-                      </span>
+                    {!['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus) && (
+                      <option value="" disabled>
+                        —
+                      </option>
                     )}
-                  </div>
-                </td>
-                <td className="row-actions">
-                  <button className="btn primary" onClick={() => onOpen(pr.id)}>
-                    Open
-                  </button>
-                </td>
-              </tr>
-            ))}
+                    <option value="not_reviewed">Not reviewed</option>
+                    <option value="in_progress">In progress</option>
+                    <option value="reviewed">Reviewed</option>
+                  </select>
+                  {pr.commentReplies > 0 && (
+                    <span className="reply-badge" title="New replies on your posted comments">
+                      💬 {pr.commentReplies}
+                    </span>
+                  )}
+                </div>
+              </td>
+              <td className="row-actions">
+                <button className="btn primary" onClick={() => onOpen(pr.id)}>
+                  Open
+                </button>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
-    </div>
+    </section>
   )
 }
 
@@ -290,13 +368,7 @@ function FilterToggle({
 }
 
 function ReviewBadge({ pr }: { pr: PullRequest }): JSX.Element {
-  const stale =
-    (pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress') &&
-    !!pr.reviewedCommit &&
-    !!pr.headCommit &&
-    pr.reviewedCommit !== pr.headCommit
-
-  if (stale) {
+  if (isStale(pr)) {
     return <span className="review-badge stale">Changes since review</span>
   }
 

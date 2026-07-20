@@ -71,7 +71,11 @@ export function App(): JSX.Element {
           <PrList myIdentity={settings?.myIdentity ?? ''} onOpen={setSelectedPrId} />
         )}
         {tab === 'prs' && configured && selectedPrId !== null && (
-          <ReviewDetail prId={selectedPrId} onBack={() => setSelectedPrId(null)} />
+          <ReviewDetail
+            prId={selectedPrId}
+            defaultModel={settings?.model ?? ''}
+            onBack={() => setSelectedPrId(null)}
+          />
         )}
       </main>
     </div>

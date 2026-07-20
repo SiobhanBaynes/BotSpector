@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
+  CopilotModel,
   FindingStatus,
   PostedComment,
   PrAdoDetails,
@@ -13,17 +14,20 @@ import { FilesTab, type FileRequest } from './FilesTab'
 
 interface Props {
   prId: number
+  defaultModel: string
   onBack: () => void
 }
 
 type StatusFilter = 'all' | FindingStatus
 type Tab = 'review' | 'files'
 
-export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
+export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
   const [review, setReview] = useState<Review | null>(null)
   const [postedComments, setPostedComments] = useState<PostedComment[]>([])
   const [adoDetails, setAdoDetails] = useState<PrAdoDetails | null>(null)
+  const [models, setModels] = useState<CopilotModel[]>([])
+  const [selectedModel, setSelectedModel] = useState<string>(defaultModel)
   const [reviewing, setReviewing] = useState(false)
   const [progress, setProgress] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
@@ -63,6 +67,19 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
     void load()
   }, [load])
 
+  // Load the available Copilot models for the per-PR model selector. Default to
+  // the Settings model; fall back to it if listing fails.
+  useEffect(() => {
+    setSelectedModel((m) => m || defaultModel)
+    let active = true
+    void window.api.copilotListModels().then((res) => {
+      if (active && res.ok) setModels(res.data)
+    })
+    return () => {
+      active = false
+    }
+  }, [defaultModel])
+
   // Fetch live Azure DevOps state (status, draft, reviewer votes) separately so
   // its network latency doesn't hold up the main review load.
   useEffect(() => {
@@ -98,7 +115,7 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
     setReviewing(true)
     setError(null)
     setProgress('Starting…')
-    const res = await window.api.reviewPullRequest(prId)
+    const res = await window.api.reviewPullRequest(prId, selectedModel)
     setReviewing(false)
     setProgress('')
     if (res.ok) setReview(res.data)
@@ -108,7 +125,7 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
   async function explainPr(): Promise<void> {
     setExplaining(true)
     setError(null)
-    const res = await window.api.explainPrDescription(prId)
+    const res = await window.api.explainPrDescription(prId, selectedModel)
     setExplaining(false)
     if (res.ok) setExplanation(res.data)
     else setError(res.error)
@@ -218,6 +235,26 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
               <option value="reviewed">Reviewed</option>
             </select>
           )}
+        </div>
+        <div className="review-model-control">
+          <span className="muted small">Model</span>
+          <select
+            className="status-select"
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={isReviewing}
+            title="Model used for the review and AI actions on this PR"
+          >
+            {!models.some((m) => m.id === selectedModel) && selectedModel && (
+              <option value={selectedModel}>{selectedModel}</option>
+            )}
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.id === defaultModel ? ' (default)' : ''}
+              </option>
+            ))}
+          </select>
         </div>
         <button className="btn primary" onClick={runReview} disabled={isReviewing}>
           {isReviewing ? (
@@ -350,7 +387,7 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
 
       {/* Files tab stays mounted so it prefetches diffs in the background. */}
       <div style={{ display: tab === 'files' ? 'block' : 'none' }}>
-        <FilesTab prId={prId} request={fileRequest} />
+        <FilesTab prId={prId} model={selectedModel} request={fileRequest} />
       </div>
 
       {tab === 'review' && priorComments.length > 0 && (
@@ -392,7 +429,13 @@ export function ReviewDetail({ prId, onBack }: Props): JSX.Element {
                   {bucket} <span className="count">{items.length}</span>
                 </h2>
                 {items.map((f) => (
-                  <FindingCard key={f.id} finding={f} onChanged={load} onOpenInFiles={openInFiles} />
+                  <FindingCard
+                    key={f.id}
+                    finding={f}
+                    model={selectedModel}
+                    onChanged={load}
+                    onOpenInFiles={openInFiles}
+                  />
                 ))}
               </section>
             )

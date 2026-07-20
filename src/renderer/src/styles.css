@@ -293,6 +293,11 @@ a {
   align-items: center;
   gap: 8px;
 }
+.review-model-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .status-select {
   background: var(--panel-2);
   color: var(--text);
@@ -408,8 +413,7 @@ a {
   gap: 8px;
   flex-wrap: wrap;
   margin: 4px 0 12px;
-}
-.filter-chip {
+}.filter-chip {
   padding: 3px 10px;
   border-radius: 12px;
   font-size: 12.5px;
@@ -425,6 +429,24 @@ a {
   background: rgba(76, 139, 245, 0.2);
   color: var(--accent);
   border-color: var(--accent);
+}
+/* Review queue sections */
+.queue-section {
+  margin-bottom: 22px;
+}
+.queue-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 6px 0 8px;
+}
+.queue-section-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.queue-section-head .count {
+  color: var(--muted);
+  font-weight: 500;
 }
 .mine-badge {
   margin-left: 8px;

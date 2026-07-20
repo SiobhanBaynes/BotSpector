@@ -84,18 +84,18 @@ const api = {
     ipcRenderer.invoke(IPC.prSetDraft, prId, isDraft),
   getPostedComments: (prId: number): Promise<IpcResult<PostedComment[]>> =>
     ipcRenderer.invoke(IPC.prGetPostedComments, prId),
-  explainPrDescription: (prId: number): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.prExplainDescription, prId),
-  explainFileChange: (prId: number, path: string): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.prExplainFileChange, prId, path),
+  explainPrDescription: (prId: number, model?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.prExplainDescription, prId, model),
+  explainFileChange: (prId: number, path: string, model?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.prExplainFileChange, prId, path, model),
   refreshComments: (prId: number): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.prRefreshComments, prId),
   getChangedFiles: (prId: number): Promise<IpcResult<ChangedFile[]>> =>
     ipcRenderer.invoke(IPC.prGetChangedFiles, prId),
   getFileDiff: (prId: number, path: string): Promise<IpcResult<FileDiff>> =>
     ipcRenderer.invoke(IPC.prGetFileDiff, prId, path),
-  reviewPullRequest: (prId: number): Promise<IpcResult<Review>> =>
-    ipcRenderer.invoke(IPC.prReview, prId),
+  reviewPullRequest: (prId: number, model?: string): Promise<IpcResult<Review>> =>
+    ipcRenderer.invoke(IPC.prReview, prId, model),
   onReviewProgress: (cb: (p: ReviewProgress) => void): (() => void) => {
     const handler = (_e: unknown, payload: ReviewProgress): void => cb(payload)
     ipcRenderer.on(IPC.prReviewProgress, handler)
@@ -110,14 +110,14 @@ const api = {
   // findings
   setFindingStatus: (findingId: number, status: FindingStatus): Promise<IpcResult<null>> =>
     ipcRenderer.invoke(IPC.findingSetStatus, findingId, status),
-  explainFinding: (findingId: number): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.findingExplain, findingId),
+  explainFinding: (findingId: number, model?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.findingExplain, findingId, model),
   getFindingCode: (findingId: number): Promise<IpcResult<CodeSnippet | null>> =>
     ipcRenderer.invoke(IPC.findingGetCode, findingId),
-  draftComment: (findingId: number): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.findingDraftComment, findingId),
-  refineComment: (findingId: number, instruction: string): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.findingRefineComment, findingId, instruction),
+  draftComment: (findingId: number, model?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.findingDraftComment, findingId, model),
+  refineComment: (findingId: number, instruction: string, model?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.findingRefineComment, findingId, instruction, model),
   updateComment: (findingId: number, text: string): Promise<IpcResult<null>> =>
     ipcRenderer.invoke(IPC.findingUpdateComment, findingId, text),
   postComment: (findingId: number): Promise<IpcResult<null>> =>
