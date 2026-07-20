@@ -65,6 +65,22 @@ function resolveModel(override?: string): string {
   return model
 }
 
+// Add ourselves as an optional reviewer on a PR — best-effort and non-blocking.
+// Only called when the user actually engages (posts a comment or changes the
+// PR status), not merely for kicking off an automated review. addSelf skips our
+// own PRs and no-ops if we're already a reviewer.
+async function ensureSelfReviewer(prId: number): Promise<void> {
+  const pr = repo.getPullRequest(prId)
+  if (!pr) return
+  try {
+    await addSelfAsOptionalReviewer(pr.adoPrId)
+  } catch (e) {
+    logger.warn(`could not add self as reviewer for pr id ${prId}`, {
+      error: (e as Error).message
+    })
+  }
+}
+
 // Refresh the Azure DevOps thread status/replies for a PR's posted comments.
 async function syncCommentThreads(prId: number): Promise<void> {
   const pr = repo.getPullRequest(prId)
@@ -322,6 +338,8 @@ export function registerIpcHandlers(): void {
     (_e, prId: number, status: ReviewStatus): IpcResult<PullRequest | null> => {
       try {
         repo.setReviewStatus(prId, status)
+        // Changing the PR status counts as engaging with it: put us on as reviewer.
+        void ensureSelfReviewer(prId)
         return ok(repo.getPullRequest(prId))
       } catch (e) {
         return fail(e)
@@ -368,6 +386,7 @@ export function registerIpcHandlers(): void {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
         await setPullRequestStatus(pr.adoPrId, status)
+        void ensureSelfReviewer(prId)
         logger.info(`set ADO status '${status}' on PR #${pr.adoPrId}`)
         return ok(await fetchPullRequestDetails(pr.adoPrId))
       } catch (e) {
@@ -383,6 +402,7 @@ export function registerIpcHandlers(): void {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
         await setPullRequestDraft(pr.adoPrId, isDraft)
+        void ensureSelfReviewer(prId)
         logger.info(`set draft=${isDraft} on ADO PR #${pr.adoPrId}`)
         return ok(await fetchPullRequestDetails(pr.adoPrId))
       } catch (e) {
@@ -536,15 +556,6 @@ export function registerIpcHandlers(): void {
       repo.setReviewStatus(prId, 'reviewing')
       send(IPC.prReviewProgress, { prId, message: 'Starting review…' })
       logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}`)
-
-      // Put ourselves on the PR as an optional reviewer so it's clear we're on it.
-      try {
-        await addSelfAsOptionalReviewer(pr.adoPrId)
-      } catch (e) {
-        logger.warn(`could not add self as reviewer for pr id ${prId}`, {
-          error: (e as Error).message
-        })
-      }
 
       // Capture the current head commit so we can detect later changes.
       let headCommit = pr.headCommit
@@ -723,6 +734,8 @@ export function registerIpcHandlers(): void {
       repo.setFindingStatus(findingId, 'posted')
       // Posting responds to a finding, which may complete the PR's review.
       repo.recomputeReviewStatus(pr.id)
+      // Posting a comment puts me on the PR as an optional reviewer.
+      void ensureSelfReviewer(pr.id)
       // Track the posted comment at the PR level so its thread status and
       // conversation survive future re-reviews (which replace findings).
       if (threadId != null) {
