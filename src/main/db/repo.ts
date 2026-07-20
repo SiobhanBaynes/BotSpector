@@ -361,8 +361,10 @@ export interface FindingContribution {
 /**
  * Store a model's review of a PR. Reviews accumulate per model: re-running the
  * SAME model replaces only its own findings, while other models' findings (and
- * their triage/comments) are left intact. New findings are given PR-unique
- * public ids so they never collide with those raised by another agent.
+ * their triage/comments) are left intact. Findings that already have a posted
+ * comment are preserved across re-reviews so the comment stays linked to the
+ * finding that sourced it. New findings are given PR-unique public ids so they
+ * never collide with those raised by another agent.
  */
 export function createReview(
   prId: number,
@@ -373,19 +375,43 @@ export function createReview(
 ): number {
   const db = getDb()
   const tx = db.transaction(() => {
-    // Replace only this model's previous review for the PR.
-    db.prepare('DELETE FROM reviews WHERE pr_id = ? AND model = ?').run(prId, model)
-    const reviewId = Number(
-      db
-        .prepare(
-          `INSERT INTO reviews(pr_id, model, status, raw_response, reviewed_commit)
-           VALUES(?, ?, 'complete', ?, ?)`
-        )
-        .run(prId, model, rawResponse, reviewedCommit).lastInsertRowid
-    )
+    // Reuse this model's existing review row (if any) so we can keep the
+    // findings that already have a posted comment.
+    const existing = db
+      .prepare('SELECT id FROM reviews WHERE pr_id = ? AND model = ? ORDER BY created_at DESC LIMIT 1')
+      .get(prId, model) as { id: number } | undefined
 
-    // Collect public ids already in use on this PR (from other models) so we can
-    // renumber any colliding new ids and keep them unique for the whole PR.
+    let reviewId: number
+    if (existing) {
+      reviewId = existing.id
+      // Drop this review's transient findings, but keep any that have a posted
+      // comment so their source finding (and triage) survives the re-review.
+      db.prepare(
+        `DELETE FROM findings
+         WHERE review_id = @reviewId
+           AND id NOT IN (
+             SELECT c.finding_id FROM comments c
+             WHERE c.finding_id IN (SELECT id FROM findings WHERE review_id = @reviewId)
+               AND c.status = 'posted' AND c.ado_thread_id IS NOT NULL
+           )`
+      ).run({ reviewId })
+      db.prepare(
+        `UPDATE reviews SET raw_response = ?, reviewed_commit = ?, created_at = datetime('now')
+         WHERE id = ?`
+      ).run(rawResponse, reviewedCommit, reviewId)
+    } else {
+      reviewId = Number(
+        db
+          .prepare(
+            `INSERT INTO reviews(pr_id, model, status, raw_response, reviewed_commit)
+             VALUES(?, ?, 'complete', ?, ?)`
+          )
+          .run(prId, model, rawResponse, reviewedCommit).lastInsertRowid
+      )
+    }
+
+    // Collect public ids already in use on this PR (other models + preserved
+    // posted findings) so we can renumber colliding new ids to stay unique.
     const usedRows = db
       .prepare(
         `SELECT f.public_id AS pid FROM findings f

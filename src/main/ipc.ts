@@ -582,9 +582,12 @@ export function registerIpcHandlers(): void {
         instructions,
         (message) => send(IPC.prReviewProgress, { prId, message }),
         repo.listPostedComments(prId),
-        // Existing findings raised by other models, so this agent can avoid
-        // duplicating them (and contribute to them instead).
-        (repo.getReviewForPr(prId)?.findings ?? []).filter((f) => f.model !== model)
+        // Existing findings the new agent should not duplicate: everything raised
+        // by other models, plus this model's own findings that we preserve (those
+        // with a posted comment).
+        (repo.getReviewForPr(prId)?.findings ?? []).filter(
+          (f) => f.model !== model || f.comment?.status === 'posted'
+        )
       )
       repo.createReview(prId, model, findings, raw, headCommit)
       // Merge this model's contributions into other agents' existing findings.
