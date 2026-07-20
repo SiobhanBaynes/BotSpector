@@ -532,6 +532,10 @@ a {
   background: rgba(227, 179, 65, 0.2);
   color: var(--medium);
 }
+.review-badge.review_pending {
+  background: rgba(163, 113, 247, 0.2);
+  color: #a371f7;
+}
 .review-badge.error {
   background: rgba(248, 81, 73, 0.2);
   color: var(--err);

@@ -227,7 +227,11 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             >
               {pr && !['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus) && (
                 <option value="" disabled>
-                  {pr.reviewStatus === 'error' ? 'Error' : '—'}
+                  {pr.reviewStatus === 'error'
+                    ? 'Error'
+                    : pr.reviewStatus === 'review_pending'
+                      ? 'Review pending'
+                      : '—'}
                 </option>
               )}
               <option value="not_reviewed">Not reviewed</option>

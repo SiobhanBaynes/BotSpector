@@ -34,6 +34,7 @@ import {
   addSelfAsOptionalReviewer,
   setPullRequestStatus,
   setPullRequestDraft,
+  setPullRequestThreadStatus,
   fetchCurrentUserDisplayName,
   fetchChangedFiles,
   fetchFileContent,
@@ -703,6 +704,30 @@ export function registerIpcHandlers(): void {
         if (!finding) throw new Error('Finding not found')
         repo.upsertComment(findingId, text)
         return ok(null)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.findingSetThreadStatus,
+    async (_e, findingId: number, status: string): Promise<IpcResult<Review | null>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding?.comment?.adoThreadId) {
+          throw new Error('This finding has no posted comment thread to update')
+        }
+        const review = repo.getReviewById(finding.reviewId)
+        const pr = review ? repo.getPullRequest(review.prId) : null
+        if (!pr) throw new Error('Could not find the pull request for this finding')
+        await setPullRequestThreadStatus(pr.adoPrId, finding.comment.adoThreadId, status)
+        logger.info(
+          `set comment thread ${finding.comment.adoThreadId} to '${status}' on ADO PR #${pr.adoPrId}`
+        )
+        // Refresh local thread status/replies to reflect the change.
+        await syncCommentThreads(pr.id)
+        return ok(repo.getReviewForPr(pr.id))
       } catch (e) {
         return fail(e)
       }

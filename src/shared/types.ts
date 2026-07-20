@@ -8,7 +8,13 @@ export type FindingStatus = 'open' | 'accepted' | 'dismissed' | 'posted'
 
 export type CommentStatus = 'draft' | 'posted'
 
-export type ReviewStatus = 'not_reviewed' | 'reviewing' | 'in_progress' | 'reviewed' | 'error'
+export type ReviewStatus =
+  | 'not_reviewed'
+  | 'reviewing'
+  | 'review_pending'
+  | 'in_progress'
+  | 'reviewed'
+  | 'error'
 
 export interface Settings {
   adoOrg: string

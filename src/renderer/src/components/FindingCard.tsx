@@ -59,6 +59,16 @@ function threadStateClass(status: string | null): string {
   }
 }
 
+// Azure DevOps comment-thread statuses we can set from the app.
+const THREAD_STATUS_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'active', label: 'Active' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'fixed', label: 'Resolved' },
+  { value: 'wontFix', label: "Won't fix" },
+  { value: 'closed', label: 'Closed' },
+  { value: 'byDesign', label: 'By design' }
+]
+
 export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -152,8 +162,20 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
     })
   }
 
+  async function setThreadStatus(status: string): Promise<void> {
+    await withBusy('thread-status', async () => {
+      const res = await window.api.setThreadStatus(finding.id, status)
+      if (!res.ok) throw new Error(res.error)
+      await onChanged()
+    })
+  }
+
   const posted = finding.comment?.status === 'posted' && finding.comment?.adoThreadId !== null
   const dirty = !!finding.comment && commentText !== finding.comment.draftText
+  const threadStatusValue =
+    THREAD_STATUS_OPTIONS.find(
+      (o) => o.value.toLowerCase() === (finding.comment?.threadStatus ?? 'active').toLowerCase()
+    )?.value ?? 'active'
 
   return (
     <div className={`finding status-${finding.status}`}>
@@ -230,6 +252,20 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
                         ? 'No replies yet'
                         : `${finding.comment.replyCount} repl${finding.comment.replyCount === 1 ? 'y' : 'ies'}`}
                     </span>
+                    <span className="spacer" />
+                    <select
+                      className="mini-status-select"
+                      title="Set the Azure DevOps comment status"
+                      value={threadStatusValue}
+                      onChange={(e) => void setThreadStatus(e.target.value)}
+                      disabled={busy !== null}
+                    >
+                      {THREAD_STATUS_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* The full thread: our posted comment first, then any replies. */}

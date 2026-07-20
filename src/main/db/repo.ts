@@ -208,11 +208,15 @@ export function resetStuckReviews(): number {
       `UPDATE pull_requests
        SET review_status = CASE
          WHEN NOT EXISTS (SELECT 1 FROM reviews r WHERE r.pr_id = pull_requests.id) THEN 'not_reviewed'
-         WHEN EXISTS (
+         WHEN NOT EXISTS (
            SELECT 1 FROM reviews r JOIN findings f ON f.review_id = r.id
            WHERE r.pr_id = pull_requests.id AND f.status = 'open'
-         ) THEN 'in_progress'
-         ELSE 'reviewed'
+         ) THEN 'reviewed'
+         WHEN NOT EXISTS (
+           SELECT 1 FROM reviews r JOIN findings f ON f.review_id = r.id
+           WHERE r.pr_id = pull_requests.id AND f.status != 'open'
+         ) THEN 'review_pending'
+         ELSE 'in_progress'
        END
        WHERE review_status = 'reviewing'`
     )
@@ -221,10 +225,13 @@ export function resetStuckReviews(): number {
 }
 
 /**
- * Derive and persist a PR's review status from its findings: 'reviewed' only
- * when every finding has been triaged (accepted / dismissed / posted), otherwise
- * 'in_progress' while any finding is still open. A PR with no review is left
- * 'not_reviewed'.
+ * Derive and persist a PR's review status from its findings:
+ *  - no review               -> 'not_reviewed'
+ *  - review, no findings      -> 'reviewed' (clean)
+ *  - findings, none triaged   -> 'review_pending' (AI reviewed, awaiting your look)
+ *  - findings, some triaged   -> 'in_progress'
+ *  - findings, all triaged    -> 'reviewed'
+ * (Triaged = accepted / dismissed / posted; open = untriaged.)
  */
 export function recomputeReviewStatus(prId: number): ReviewStatus {
   const db = getDb()
@@ -232,12 +239,20 @@ export function recomputeReviewStatus(prId: number): ReviewStatus {
   if (!hasReview) return 'not_reviewed'
   const row = db
     .prepare(
-      `SELECT COUNT(*) AS openCount
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN f.status = 'open' THEN 1 ELSE 0 END) AS openCount
        FROM findings f JOIN reviews r ON r.id = f.review_id
-       WHERE r.pr_id = ? AND f.status = 'open'`
+       WHERE r.pr_id = ?`
     )
-    .get(prId) as { openCount: number }
-  const status: ReviewStatus = row.openCount > 0 ? 'in_progress' : 'reviewed'
+    .get(prId) as { total: number; openCount: number | null }
+  const total = row.total ?? 0
+  const openCount = row.openCount ?? 0
+  let status: ReviewStatus
+  if (total === 0) status = 'reviewed'
+  else if (openCount === total) status = 'review_pending'
+  else if (openCount === 0) status = 'reviewed'
+  else status = 'in_progress'
   db.prepare('UPDATE pull_requests SET review_status = ? WHERE id = ?').run(status, prId)
   return status
 }
@@ -262,13 +277,17 @@ export function recomputeAllReviewStatuses(): void {
     .prepare(
       `UPDATE pull_requests
        SET review_status = CASE
-         WHEN EXISTS (
+         WHEN NOT EXISTS (
            SELECT 1 FROM reviews r JOIN findings f ON f.review_id = r.id
            WHERE r.pr_id = pull_requests.id AND f.status = 'open'
-         ) THEN 'in_progress'
-         ELSE 'reviewed'
+         ) THEN 'reviewed'
+         WHEN NOT EXISTS (
+           SELECT 1 FROM reviews r JOIN findings f ON f.review_id = r.id
+           WHERE r.pr_id = pull_requests.id AND f.status != 'open'
+         ) THEN 'review_pending'
+         ELSE 'in_progress'
        END
-       WHERE review_status IN ('reviewed', 'in_progress')
+       WHERE review_status IN ('reviewed', 'in_progress', 'review_pending')
          AND EXISTS (SELECT 1 FROM reviews r WHERE r.pr_id = pull_requests.id)`
     )
     .run()

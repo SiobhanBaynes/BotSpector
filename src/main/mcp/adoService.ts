@@ -295,6 +295,32 @@ export async function setPullRequestDraft(adoPrId: number, isDraft: boolean): Pr
 }
 
 /**
+ * Set the status of a specific comment thread (e.g. resolve or reopen).
+ * Valid statuses: active, fixed (resolved), wontFix, closed, byDesign, pending.
+ */
+export async function setPullRequestThreadStatus(
+  adoPrId: number,
+  threadId: number,
+  status: string
+): Promise<void> {
+  const cfg = restConfig()
+  if (!cfg) throw new Error('Azure DevOps is not configured')
+  const url =
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/pullRequests/${adoPrId}/threads/${threadId}?api-version=7.1`
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Basic ${cfg.auth}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ status })
+  })
+  if (!res.ok) throw new Error(`Could not update comment status (${res.status})`)
+}
+
+/**
  * The commit range for *this PR's own changes*: the merge base (common ancestor
  * with the target branch) as the base, and the latest source commit as the head.
  * Using the merge base rather than the target-branch tip means the diff excludes

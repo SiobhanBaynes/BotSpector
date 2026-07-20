@@ -57,7 +57,9 @@ function isMine(pr: PullRequest, myIdentity: string): boolean {
 // A reviewed PR that has changed since we reviewed it (needs a re-review).
 function isStale(pr: PullRequest): boolean {
   return (
-    (pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress') &&
+    (pr.reviewStatus === 'reviewed' ||
+      pr.reviewStatus === 'in_progress' ||
+      pr.reviewStatus === 'review_pending') &&
     !!pr.reviewedCommit &&
     !!pr.headCommit &&
     pr.reviewedCommit !== pr.headCommit
@@ -152,13 +154,26 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
     [refresh]
   )
 
-  // Build the review queue: PRs needing re-review first, then oldest first;
-  // our own PRs are pulled out into their own section.
+  // Build the review queue: PRs needing re-review first, then in-progress, then
+  // oldest first; our own PRs are pulled out into their own section.
   const visible = prs.filter((pr) => matchesFilters(pr, filters, myIdentity))
   const mine = visible.filter((pr) => isMine(pr, myIdentity)).sort(byOldest)
   const others = visible.filter((pr) => !isMine(pr, myIdentity))
   const needsReReview = others.filter(isStale).sort(byOldest)
-  const queue = others.filter((pr) => !isStale(pr)).sort(byOldest)
+  const reviewPending = others
+    .filter((pr) => !isStale(pr) && pr.reviewStatus === 'review_pending')
+    .sort(byOldest)
+  const inProgress = others
+    .filter((pr) => !isStale(pr) && pr.reviewStatus === 'in_progress')
+    .sort(byOldest)
+  const queue = others
+    .filter(
+      (pr) =>
+        !isStale(pr) &&
+        pr.reviewStatus !== 'review_pending' &&
+        pr.reviewStatus !== 'in_progress'
+    )
+    .sort(byOldest)
 
   return (
     <div className="prlist">
@@ -221,6 +236,26 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           title="Needs re-review"
           hint="Reviewed, but the PR changed since"
           prs={needsReReview}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {reviewPending.length > 0 && (
+        <PrSection
+          title="Review pending"
+          hint="AI reviewed — awaiting your triage"
+          prs={reviewPending}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {inProgress.length > 0 && (
+        <PrSection
+          title="In progress"
+          hint="Triage started"
+          prs={inProgress}
           myIdentity={myIdentity}
           onOpen={onOpen}
           onStatus={changeStatus}
@@ -375,6 +410,7 @@ function ReviewBadge({ pr }: { pr: PullRequest }): JSX.Element {
   const map: Record<PullRequest['reviewStatus'], string> = {
     not_reviewed: 'Not reviewed',
     reviewing: 'Reviewing…',
+    review_pending: 'Review pending',
     in_progress: 'In progress',
     reviewed: 'Reviewed',
     error: 'Error'

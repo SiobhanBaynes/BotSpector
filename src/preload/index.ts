@@ -122,6 +122,8 @@ const api = {
     ipcRenderer.invoke(IPC.findingUpdateComment, findingId, text),
   postComment: (findingId: number): Promise<IpcResult<null>> =>
     ipcRenderer.invoke(IPC.findingPostComment, findingId),
+  setThreadStatus: (findingId: number, status: string): Promise<IpcResult<Review | null>> =>
+    ipcRenderer.invoke(IPC.findingSetThreadStatus, findingId, status),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)
