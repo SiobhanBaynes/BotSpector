@@ -194,6 +194,27 @@ export function getPullRequest(id: number): PullRequest | null {
 
 export function setReviewStatus(prId: number, status: ReviewStatus): void {
   getDb().prepare('UPDATE pull_requests SET review_status = ? WHERE id = ?').run(status, prId)
+  // Reaching a fully-reviewed state (manually, via Approve, or once every
+  // finding is triaged) means we've signed off on the PR at its current head,
+  // so stamp the latest review with the current commit to clear staleness.
+  if (status === 'reviewed') captureReviewedCommit(prId)
+}
+
+/**
+ * Stamp the PR's most recent review with the PR's current head commit, so the
+ * "changed since we reviewed it" (stale) check resets. Called whenever a PR
+ * reaches the 'reviewed' state.
+ */
+export function captureReviewedCommit(prId: number): void {
+  getDb()
+    .prepare(
+      `UPDATE reviews
+         SET reviewed_commit = (SELECT head_commit FROM pull_requests WHERE id = @prId)
+       WHERE id = (
+         SELECT id FROM reviews WHERE pr_id = @prId ORDER BY created_at DESC LIMIT 1
+       )`
+    )
+    .run({ prId })
 }
 
 /**
@@ -254,6 +275,9 @@ export function recomputeReviewStatus(prId: number): ReviewStatus {
   else if (openCount === 0) status = 'reviewed'
   else status = 'in_progress'
   db.prepare('UPDATE pull_requests SET review_status = ? WHERE id = ?').run(status, prId)
+  // Once every finding is triaged (accepted/dismissed/posted), we've signed off
+  // at the current head — re-stamp the review commit so it isn't flagged stale.
+  if (status === 'reviewed') captureReviewedCommit(prId)
   return status
 }
 

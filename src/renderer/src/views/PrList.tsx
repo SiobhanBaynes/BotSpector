@@ -71,6 +71,14 @@ function byOldest(a: PullRequest, b: PullRequest): number {
   return a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0
 }
 
+// Never-reviewed PRs first, then oldest first within each group.
+function byUnreviewedThenOldest(a: PullRequest, b: PullRequest): number {
+  const aNew = a.reviewStatus === 'not_reviewed' ? 0 : 1
+  const bNew = b.reviewStatus === 'not_reviewed' ? 0 : 1
+  if (aNew !== bNew) return aNew - bNew
+  return byOldest(a, b)
+}
+
 export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   const [prs, setPrs] = useState<PullRequest[]>([])
   const [loading, setLoading] = useState(false)
@@ -173,7 +181,7 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
         pr.reviewStatus !== 'review_pending' &&
         pr.reviewStatus !== 'in_progress'
     )
-    .sort(byOldest)
+    .sort(byUnreviewedThenOldest)
 
   return (
     <div className="prlist">
