@@ -52,6 +52,7 @@ interface PrRow {
   reviewed_commit: string | null
   review_status: string
   posted_comments: number | null
+  unaddressed_comments: number | null
   comment_replies: number | null
   is_draft: number | null
   approvals: number | null
@@ -78,6 +79,7 @@ function mapPr(row: PrRow): PullRequest {
     reviewedCommit: row.reviewed_commit ?? null,
     reviewStatus: row.review_status as ReviewStatus,
     postedComments: row.posted_comments ?? 0,
+    unaddressedComments: row.unaddressed_comments ?? 0,
     commentReplies: row.comment_replies ?? 0,
     isDraft: !!row.is_draft,
     approvals: row.approvals ?? 0,
@@ -96,6 +98,7 @@ export function upsertPullRequest(
     | 'reviewStatus'
     | 'reviewedCommit'
     | 'postedComments'
+    | 'unaddressedComments'
     | 'commentReplies'
     | 'commentCount'
     | 'unresolvedCommentCount'
@@ -172,6 +175,13 @@ const PR_SELECT = `
        JOIN findings f ON f.id = c.finding_id
        JOIN reviews r ON r.id = f.review_id
        WHERE r.pr_id = p.id AND c.status = 'posted' AND c.ado_thread_id IS NOT NULL) AS posted_comments,
+    (SELECT COUNT(*) FROM comments c
+       JOIN findings f ON f.id = c.finding_id
+       JOIN reviews r ON r.id = f.review_id
+       WHERE r.pr_id = p.id AND c.status = 'posted' AND c.ado_thread_id IS NOT NULL
+         AND COALESCE(c.reply_count, 0) = 0
+         AND LOWER(COALESCE(c.thread_status, '')) NOT IN ('fixed', 'closed', 'wontfix', 'bydesign')
+    ) AS unaddressed_comments,
     (SELECT COALESCE(SUM(c.reply_count), 0) FROM comments c
        JOIN findings f ON f.id = c.finding_id
        JOIN reviews r ON r.id = f.review_id

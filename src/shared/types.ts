@@ -41,6 +41,7 @@ export interface PullRequest {
   reviewedCommit: string | null
   reviewStatus: ReviewStatus
   postedComments: number
+  unaddressedComments: number
   commentReplies: number
   isDraft: boolean
   approvals: number

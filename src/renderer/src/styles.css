@@ -544,6 +544,10 @@ a {
   background: rgba(227, 179, 65, 0.2);
   color: var(--medium);
 }
+.review-badge.ready-rereview {
+  background: rgba(63, 185, 80, 0.2);
+  color: #3fb950;
+}
 
 /* review detail */
 .review-meta {

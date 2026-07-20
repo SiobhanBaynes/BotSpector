@@ -419,6 +419,7 @@ export async function listPullRequests(): Promise<
       | 'reviewStatus'
       | 'reviewedCommit'
       | 'postedComments'
+      | 'unaddressedComments'
       | 'commentReplies'
       | 'commentCount'
       | 'unresolvedCommentCount'

@@ -66,6 +66,13 @@ function isStale(pr: PullRequest): boolean {
   )
 }
 
+// A stale PR is ready for another look once the author has engaged with every
+// comment we posted (reply or resolved thread) — or we posted no comments at
+// all. Otherwise we're still waiting on them and it's only "changed since review".
+function isReadyForReReview(pr: PullRequest): boolean {
+  return pr.unaddressedComments === 0
+}
+
 // Oldest first, by PR creation/update time.
 function byOldest(a: PullRequest, b: PullRequest): number {
   return a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0
@@ -171,7 +178,15 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   const others = visible.filter(
     (pr) => !isMine(pr, myIdentity) && pr.myVote < 5
   )
-  const needsReReview = others.filter(isStale).sort(byOldest)
+  // A stale PR is "ready for re-review" once the author has engaged with every
+  // comment we posted (a reply or a resolved thread), or we posted none. Until
+  // then it's just "changed since review" and shouldn't demand our attention.
+  const readyForReReview = others
+    .filter((pr) => isStale(pr) && isReadyForReReview(pr))
+    .sort(byOldest)
+  const changedSinceReview = others
+    .filter((pr) => isStale(pr) && !isReadyForReReview(pr))
+    .sort(byOldest)
   const reviewPending = others
     .filter((pr) => !isStale(pr) && pr.reviewStatus === 'review_pending')
     .sort(byOldest)
@@ -243,11 +258,21 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
         </div>
       )}
 
-      {needsReReview.length > 0 && (
+      {readyForReReview.length > 0 && (
         <PrSection
-          title="Needs re-review"
-          hint="Reviewed, but the PR changed since"
-          prs={needsReReview}
+          title="Ready for re-review"
+          hint="Changed and the author has addressed your comments"
+          prs={readyForReReview}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {changedSinceReview.length > 0 && (
+        <PrSection
+          title="Changed since review"
+          hint="Changed, but still waiting on your comments to be addressed"
+          prs={changedSinceReview}
           myIdentity={myIdentity}
           onOpen={onOpen}
           onStatus={changeStatus}
@@ -416,7 +441,11 @@ function FilterToggle({
 
 function ReviewBadge({ pr }: { pr: PullRequest }): JSX.Element {
   if (isStale(pr)) {
-    return <span className="review-badge stale">Changes since review</span>
+    return isReadyForReReview(pr) ? (
+      <span className="review-badge ready-rereview">Ready for re-review</span>
+    ) : (
+      <span className="review-badge stale">Changed since review</span>
+    )
   }
 
   const map: Record<PullRequest['reviewStatus'], string> = {
