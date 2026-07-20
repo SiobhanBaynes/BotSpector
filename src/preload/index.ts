@@ -3,6 +3,7 @@ import { IPC } from '../shared/ipc'
 import type {
   AgentInstructions,
   ChangedFile,
+  ChatMessage,
   CodeSnippet,
   CopilotModel,
   DeviceCodeInfo,
@@ -130,6 +131,11 @@ const api = {
     model?: string
   ): Promise<IpcResult<ResolutionAssessment>> =>
     ipcRenderer.invoke(IPC.findingCheckResolved, findingId, model),
+  chatAboutPr: (
+    prId: number,
+    history: ChatMessage[],
+    model?: string
+  ): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.prChat, prId, history, model),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)

@@ -4,7 +4,13 @@ import { callTool, listTools } from '../mcp/adoClient'
 import { getPullRequestContext } from '../mcp/adoService'
 import { logger } from '../logger'
 import { FINDING_BUCKETS } from '../../shared/types'
-import type { CommentReply, Finding, PostedComment, ResolutionAssessment } from '../../shared/types'
+import type {
+  ChatMessage,
+  CommentReply,
+  Finding,
+  PostedComment,
+  ResolutionAssessment
+} from '../../shared/types'
 import type { NewFinding } from '../db/repo'
 
 /**
@@ -263,6 +269,86 @@ function extractJsonObject(text: string): string {
 }
 
 // ---- single-shot helpers for per-finding actions ----
+
+const CHAT_SYSTEM_PROMPT = `You are a helpful, knowledgeable assistant embedded in a code-review tool.
+You answer a reviewer's questions about one specific Azure DevOps pull request.
+You are given the PR's context, the current review findings, and any comments
+posted in previous reviews. You also have Azure DevOps tools to read the changed
+files and other PR details on demand — use them when you need specifics you don't
+already have. Be concise, practical, and honest. Use plain language, reference
+finding IDs and file paths where helpful, and say when you're unsure.`
+
+/**
+ * Free-form chat about a single PR. Seeds the conversation with the PR context,
+ * the review findings, and prior comments, then runs the tool-enabled agent loop
+ * over the reviewer's message history and returns the assistant's reply.
+ */
+export async function chatAboutPullRequest(
+  input: {
+    adoPrId: number
+    findingsSummary: string
+    priorComments: PostedComment[]
+    history: ChatMessage[]
+  },
+  model: string
+): Promise<string> {
+  const { adoPrId, findingsSummary, priorComments, history } = input
+  const context = await getPullRequestContext(adoPrId)
+  const tools = await mcpToolsAsDefinitions()
+
+  const messages: AgentMessage[] = [
+    { role: 'system', content: CHAT_SYSTEM_PROMPT },
+    {
+      role: 'system',
+      content:
+        `Context for pull request #${adoPrId}:\n\n` +
+        `${context.summary || '(no details fetched; use tools to gather them)'}\n\n` +
+        `Current review findings:\n${findingsSummary || '(no review has been run yet)'}` +
+        `${buildPriorCommentsBlock(priorComments)}`
+    },
+    ...history.map((m) => ({ role: m.role, content: m.content }) as AgentMessage)
+  ]
+
+  let finalContent: string | null = null
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const result = await complete({ model, messages, tools })
+    if (result.toolCalls.length > 0) {
+      messages.push({ role: 'assistant', content: result.content, toolCalls: result.toolCalls })
+      for (const call of result.toolCalls) {
+        let toolResult: string
+        try {
+          const args = call.arguments ? JSON.parse(call.arguments) : {}
+          toolResult = await callTool(call.name, args)
+        } catch (e) {
+          toolResult = `Error: ${(e as Error).message}`
+        }
+        messages.push({
+          role: 'tool',
+          toolCallId: call.id,
+          name: call.name,
+          content:
+            toolResult.length > MAX_TOOL_RESULT_CHARS
+              ? toolResult.slice(0, MAX_TOOL_RESULT_CHARS) +
+                `\n\n[…truncated ${toolResult.length - MAX_TOOL_RESULT_CHARS} more characters.]`
+              : toolResult
+        })
+      }
+      continue
+    }
+    finalContent = result.content ?? ''
+    break
+  }
+
+  if (finalContent === null) {
+    messages.push({
+      role: 'user',
+      content: 'Stop calling tools and answer now based on what you already have.'
+    })
+    const finalResult = await complete({ model, messages })
+    finalContent = finalResult.content ?? ''
+  }
+  return finalContent.trim()
+}
 
 export async function assessFindingResolution(
   input: {

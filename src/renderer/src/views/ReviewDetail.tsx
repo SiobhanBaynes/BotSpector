@@ -11,6 +11,7 @@ import type {
 import { FINDING_BUCKETS } from '../../../shared/types'
 import { FindingCard } from '../components/FindingCard'
 import { FilesTab, type FileRequest } from './FilesTab'
+import { ChatTab } from './ChatTab'
 
 interface Props {
   prId: number
@@ -19,7 +20,7 @@ interface Props {
 }
 
 type StatusFilter = 'all' | FindingStatus
-type Tab = 'review' | 'files'
+type Tab = 'review' | 'files' | 'chat'
 
 export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
@@ -379,6 +380,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         >
           Files
         </button>
+        <button
+          className={tab === 'chat' ? 'tab active' : 'tab'}
+          onClick={() => setTab('chat')}
+        >
+          Chat
+        </button>
       </div>
 
       {isReviewing && (
@@ -393,6 +400,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
       <div style={{ display: tab === 'files' ? 'block' : 'none' }}>
         <FilesTab prId={prId} model={selectedModel} request={fileRequest} />
       </div>
+
+      {tab === 'chat' && <ChatTab prId={prId} model={selectedModel} />}
 
       {tab === 'review' && priorComments.length > 0 && (
         <PriorComments comments={priorComments} />

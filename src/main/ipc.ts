@@ -4,6 +4,7 @@ import { IPC } from '../shared/ipc'
 import type {
   AgentInstructions,
   ChangedFile,
+  ChatMessage,
   CodeSnippet,
   CopilotModel,
   DeviceCodeInfo,
@@ -44,6 +45,7 @@ import {
 import {
   DEFAULT_REVIEW_INSTRUCTIONS,
   assessFindingResolution,
+  chatAboutPullRequest,
   draftComment,
   explainFinding,
   explainFileChange,
@@ -677,6 +679,37 @@ export function registerIpcHandlers(): void {
           model
         )
         return ok(assessment)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prChat,
+    async (
+      _e,
+      prId: number,
+      history: ChatMessage[],
+      modelArg?: string
+    ): Promise<IpcResult<string>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const model = resolveModel(modelArg)
+        const review = repo.getReviewForPr(prId)
+        const findingsSummary = (review?.findings ?? [])
+          .map((f) => {
+            const loc = f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ''})` : ''
+            return `- [${f.publicId} · ${f.bucket} · ${f.status}] ${f.title}${loc}\n  ${f.description}`
+          })
+          .join('\n')
+        const priorComments = repo.listPostedComments(prId)
+        const reply = await chatAboutPullRequest(
+          { adoPrId: pr.adoPrId, findingsSummary, priorComments, history },
+          model
+        )
+        return ok(reply)
       } catch (e) {
         return fail(e)
       }

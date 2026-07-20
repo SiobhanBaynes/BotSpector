@@ -141,6 +141,12 @@ export interface ResolutionAssessment {
   explanation: string
 }
 
+// A single message in the per-PR chat conversation.
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface AgentInstructions {
   instructions: string
   isDefault: boolean
