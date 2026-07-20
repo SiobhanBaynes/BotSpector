@@ -207,14 +207,26 @@ export async function addSelfAsOptionalReviewer(adoPrId: number): Promise<void> 
   if (!cfg) return
   const userId = await fetchCurrentUserId()
   if (!userId) return
-  const url =
-    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
-    `${encodeURIComponent(cfg.repo)}/pullRequests/${adoPrId}/reviewers/${userId}?api-version=7.1`
   const headers = {
     Authorization: `Basic ${cfg.auth}`,
     'Content-Type': 'application/json',
     Accept: 'application/json'
   }
+
+  // Don't add ourselves as a reviewer on our own PR.
+  try {
+    const prRes = await fetch(`${prRestUrl(cfg, adoPrId)}?api-version=7.1`, { headers })
+    if (prRes.ok) {
+      const pr = (await prRes.json()) as { createdBy?: { id?: string } }
+      if (pr.createdBy?.id && pr.createdBy.id === userId) return
+    }
+  } catch {
+    // If the author check fails, proceed — the reviewers PUT is still safe.
+  }
+
+  const url =
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/pullRequests/${adoPrId}/reviewers/${userId}?api-version=7.1`
   // If we're already a reviewer, leave the entry (and any existing vote) alone.
   const existing = await fetch(url, { headers }).catch(() => null)
   if (existing && existing.ok) return
