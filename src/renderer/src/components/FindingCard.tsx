@@ -218,60 +218,75 @@ export function FindingCard({ finding, onChanged, onOpenInFiles }: Props): JSX.E
                     : 'Comment (draft)'}
               </strong>
 
-              {posted && (
-                <div className="thread-state">
-                  <span className={`thread-pill ${threadStateClass(finding.comment.threadStatus)}`}>
-                    {threadStateLabel(finding.comment.threadStatus)}
-                  </span>
-                  <span className="muted small">
-                    {finding.comment.replyCount === 0
-                      ? 'No replies yet'
-                      : `${finding.comment.replyCount} repl${finding.comment.replyCount === 1 ? 'y' : 'ies'}`}
-                  </span>
-                </div>
-              )}
+              {posted ? (
+                <>
+                  <div className="thread-state">
+                    <span className={`thread-pill ${threadStateClass(finding.comment.threadStatus)}`}>
+                      {threadStateLabel(finding.comment.threadStatus)}
+                    </span>
+                    <span className="muted small">
+                      {finding.comment.replyCount === 0
+                        ? 'No replies yet'
+                        : `${finding.comment.replyCount} repl${finding.comment.replyCount === 1 ? 'y' : 'ies'}`}
+                    </span>
+                  </div>
 
-              {posted && finding.comment.replies.length > 0 && (
-                <div className="replies">
-                  {finding.comment.replies.map((r, i) => (
-                    <div key={i} className="reply">
+                  {/* The full thread: our posted comment first, then any replies. */}
+                  <div className="replies thread-conversation">
+                    <div className="reply mine">
                       <div className="reply-head small">
-                        <span className="reply-author">{r.author}</span>
-                        {r.date && (
-                          <span className="muted"> · {new Date(r.date).toLocaleString()}</span>
+                        <span className="reply-author">You</span>
+                        {finding.comment.postedAt && (
+                          <span className="muted">
+                            {' · '}
+                            {new Date(finding.comment.postedAt).toLocaleString()}
+                          </span>
                         )}
                       </div>
-                      <div className="reply-text">{r.text}</div>
+                      <div className="reply-text">{finding.comment.draftText}</div>
                     </div>
-                  ))}
-                </div>
-              )}
-
-              <textarea
-                className="comment-editor"
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                rows={5}
-                disabled={busy !== null}
-              />
-
-              <div className="refine-row">
-                <span className="muted small">Fine-tune:</span>
-                {REFINEMENTS.map((r) => (
-                  <button
-                    key={r.key}
-                    className="btn subtle small-btn"
-                    onClick={() => refine(r.key, r.instruction)}
+                    {finding.comment.replies.map((r, i) => (
+                      <div key={i} className="reply">
+                        <div className="reply-head small">
+                          <span className="reply-author">{r.author}</span>
+                          {r.date && (
+                            <span className="muted"> · {new Date(r.date).toLocaleString()}</span>
+                          )}
+                        </div>
+                        <div className="reply-text">{r.text}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <textarea
+                    className="comment-editor"
+                    value={commentText}
+                    onChange={(e) => setCommentText(e.target.value)}
+                    rows={5}
                     disabled={busy !== null}
-                  >
-                    {busy === `refine-${r.key}` ? '…' : r.label}
-                  </button>
-                ))}
-                <span className="spacer" />
-                <button className="btn" onClick={saveEdit} disabled={busy !== null || !dirty}>
-                  {busy === 'save' ? '…' : 'Save edits'}
-                </button>
-              </div>
+                  />
+
+                  <div className="refine-row">
+                    <span className="muted small">Fine-tune:</span>
+                    {REFINEMENTS.map((r) => (
+                      <button
+                        key={r.key}
+                        className="btn subtle small-btn"
+                        onClick={() => refine(r.key, r.instruction)}
+                        disabled={busy !== null}
+                      >
+                        {busy === `refine-${r.key}` ? '…' : r.label}
+                      </button>
+                    ))}
+                    <span className="spacer" />
+                    <button className="btn" onClick={saveEdit} disabled={busy !== null || !dirty}>
+                      {busy === 'save' ? '…' : 'Save edits'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -294,7 +309,7 @@ export function FindingCard({ finding, onChanged, onOpenInFiles }: Props): JSX.E
                 Show in Files
               </button>
             )}
-            <button className="btn" onClick={draft} disabled={busy !== null}>
+            <button className="btn" onClick={draft} disabled={busy !== null || posted}>
               {busy === 'draft' ? '…' : finding.comment ? 'Re-draft' : 'Draft a comment'}
             </button>
             <button

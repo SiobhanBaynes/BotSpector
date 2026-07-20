@@ -458,6 +458,10 @@ a {
   border-radius: 6px;
   padding: 8px 10px;
 }
+.reply.mine {
+  border-color: var(--accent);
+  background: rgba(76, 139, 245, 0.08);
+}
 .reply-author {
   font-weight: 600;
 }
