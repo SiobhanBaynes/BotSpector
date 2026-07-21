@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PullRequest, ReviewStatus } from '../../../shared/types'
 
 interface Props {
@@ -93,6 +93,9 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [filters, setFilters] = useState<Filters>(loadFilters)
+  // Guards against overlapping refreshes (interval + focus + visibility can all
+  // fire at once); without it, bgBusy could get stuck showing "Updating…".
+  const refreshing = useRef(false)
 
   // Persist filter selections across sessions.
   useEffect(() => {
@@ -103,17 +106,25 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
     setFilters((f) => ({ ...f, [key]: !f[key] }))
 
   const refresh = useCallback(async (silent = false): Promise<void> => {
+    if (refreshing.current) return
+    refreshing.current = true
     if (silent) setBgBusy(true)
     else setLoading(true)
-    const res = await window.api.listPullRequests()
-    if (silent) setBgBusy(false)
-    else setLoading(false)
-    if (res.ok) {
-      setPrs(res.data)
-      setError(null)
-      setLastRefreshed(new Date())
-    } else if (!silent) {
-      setError(res.error)
+    try {
+      const res = await window.api.listPullRequests()
+      if (res.ok) {
+        setPrs(res.data)
+        setError(null)
+        setLastRefreshed(new Date())
+      } else if (!silent) {
+        setError(res.error)
+      }
+    } catch (e) {
+      if (!silent) setError((e as Error).message)
+    } finally {
+      refreshing.current = false
+      if (silent) setBgBusy(false)
+      else setLoading(false)
     }
   }, [])
 

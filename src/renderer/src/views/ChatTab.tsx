@@ -13,7 +13,7 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
   // Load the persisted conversation for this PR (and reset when it changes).
   useEffect(() => {
@@ -29,9 +29,9 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
     }
   }, [prId])
 
-  // Keep the transcript scrolled to the latest message.
+  // Keep the latest message in view (the page is the scroll container).
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [messages, busy])
 
   async function send(): Promise<void> {
@@ -86,7 +86,7 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
         </button>
       </div>
 
-      <div className="chat-transcript" ref={scrollRef}>
+      <div className="chat-transcript">
         {messages.length === 0 && !busy && (
           <div className="chat-empty muted">
             Ask anything about this pull request — the review findings, a specific file, why a
@@ -115,6 +115,7 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
             </div>
           </div>
         )}
+        <div ref={bottomRef} />
       </div>
 
       {error && <div className="banner err">{error}</div>}
