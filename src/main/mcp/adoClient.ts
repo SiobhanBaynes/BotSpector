@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { secrets } from '../secrets'
 import { getSetting } from '../db/repo'
+import { getNpxCommand } from '../fixPath'
 
 /**
  * Manages the connection to the official Azure DevOps MCP server
@@ -53,7 +54,7 @@ export async function ensureConnected(): Promise<Client> {
     await disconnect()
 
     const t = new StdioClientTransport({
-      command: process.platform === 'win32' ? 'npx.cmd' : 'npx',
+      command: getNpxCommand(),
       args: [
         '-y',
         '@azure-devops/mcp',
