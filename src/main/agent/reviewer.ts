@@ -268,25 +268,40 @@ export async function reviewPullRequest(
   }
 
   onProgress('Compiling findings…')
-  const { findings, additions } = parseReport(finalContent)
-  return { findings, additions, raw: finalContent }
+  let report = tryParseReport(finalContent)
+  if (!report) {
+    // Some models (notably Claude) wrap their answer in prose or markdown despite
+    // the instructions, so the JSON can't be parsed. Ask once for a clean re-emit.
+    messages.push({ role: 'assistant', content: finalContent })
+    messages.push({
+      role: 'user',
+      content:
+        'Your previous message was not valid JSON. Reply with ONLY the JSON object in the ' +
+        'required format — no prose, no explanation, no markdown code fences.'
+    })
+    const repair = await complete({ model, messages })
+    const repaired = repair.content ?? ''
+    report = tryParseReport(repaired)
+    if (report) finalContent = repaired
+  }
+  if (!report) throw new Error('The model did not return valid JSON findings.')
+  return { findings: report.findings, additions: report.additions, raw: finalContent }
 }
 
-function parseReport(content: string): {
+/** Parse the model's report, returning null (rather than throwing) on failure. */
+function tryParseReport(content: string): {
   findings: NewFinding[]
   additions: FindingContribution[]
-} {
+} | null {
   const jsonText = extractJsonObject(content)
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonText)
   } catch {
-    throw new Error('The model did not return valid JSON findings.')
+    return null
   }
   const report = reportSchema.safeParse(parsed)
-  if (!report.success) {
-    throw new Error('The model returned findings in an unexpected format.')
-  }
+  if (!report.success) return null
 
   const findings = report.data.findings.map((f, idx) => ({
     publicId: f.id?.trim() || `F-${String(idx + 1).padStart(3, '0')}`,
@@ -304,12 +319,33 @@ function parseReport(content: string): {
   return { findings, additions }
 }
 
+// Extract the first balanced JSON object from arbitrary model output, tolerating
+// surrounding prose and markdown fences and ignoring braces inside strings.
 function extractJsonObject(text: string): string {
-  const trimmed = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
-  const start = trimmed.indexOf('{')
-  const end = trimmed.lastIndexOf('}')
-  if (start === -1 || end <= start) return trimmed
-  return trimmed.slice(start, end + 1)
+  let s = text.trim()
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) s = fence[1].trim()
+  const start = s.indexOf('{')
+  if (start === -1) return s
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+    } else if (ch === '"') {
+      inStr = true
+    } else if (ch === '{') {
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0) return s.slice(start, i + 1)
+    }
+  }
+  return s.slice(start)
 }
 
 // ---- single-shot helpers for per-finding actions ----
