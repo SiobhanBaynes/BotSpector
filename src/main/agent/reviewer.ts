@@ -356,7 +356,22 @@ You are given the PR's context, the current review findings, and any comments
 posted in previous reviews. You also have Azure DevOps tools to read the changed
 files and other PR details on demand — use them when you need specifics you don't
 already have. Be concise, practical, and honest. Use plain language, reference
-finding IDs and file paths where helpful, and say when you're unsure.`
+finding IDs and file paths where helpful, and say when you're unsure.
+
+IMPORTANT: When you need to inspect a file or PR detail, call the tool directly in
+the same turn. Do NOT reply with only a statement of intent like "I'll check the
+Dockerfile" and then stop — either make the tool calls now or give your actual
+answer. Only send a plain-text reply once you can genuinely answer the question.`
+
+// A reply that only announces intent to act (and made no tool calls) — we nudge
+// the model to actually proceed instead of ending the turn here.
+function looksLikeIntentOnly(content: string): boolean {
+  const c = content.trim()
+  if (c.length > 400) return false
+  return /^(sure[,.!]?\s*)?(ok(ay)?[,.!]?\s*)?(i'?ll|i will|let me|let's|first,? i|i'?m going to|i am going to)\b/i.test(
+    c
+  )
+}
 
 /**
  * Free-form chat about a single PR. Seeds the conversation with the PR context,
@@ -390,6 +405,7 @@ export async function chatAboutPullRequest(
   ]
 
   let finalContent: string | null = null
+  let nudged = false
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const result = await complete({ model, messages, tools })
     if (result.toolCalls.length > 0) {
@@ -415,7 +431,21 @@ export async function chatAboutPullRequest(
       }
       continue
     }
-    finalContent = result.content ?? ''
+    const content = result.content ?? ''
+    // The model announced it would use a tool but didn't actually call one and
+    // just stopped. Nudge it once to follow through rather than returning the
+    // empty promise to the user.
+    if (!nudged && looksLikeIntentOnly(content)) {
+      nudged = true
+      messages.push({ role: 'assistant', content })
+      messages.push({
+        role: 'user',
+        content:
+          'Go ahead and do that now: make the tool calls you need, then give me your answer.'
+      })
+      continue
+    }
+    finalContent = content
     break
   }
 
