@@ -63,6 +63,24 @@ function fail(error: unknown): IpcResult<never> {
   return { ok: false, error: error instanceof Error ? error.message : String(error) }
 }
 
+// Run an async operation over items with a bounded number in flight at once, so
+// large PR queues refresh quickly without spawning dozens of concurrent calls.
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>
+): Promise<void> {
+  let index = 0
+  const worker = async (): Promise<void> => {
+    while (index < items.length) {
+      const current = index++
+      await fn(items[current])
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  await Promise.all(workers)
+}
+
 // Use a per-call model override when provided, otherwise the Settings default.
 function resolveModel(override?: string): string {
   const model = (override && override.trim()) || repo.getSetting('model')
@@ -252,8 +270,10 @@ export function registerIpcHandlers(): void {
       // Reconcile: anything not in the active set becomes inactive (hidden).
       repo.markAllPullRequestsInactive()
       for (const pr of prs) repo.upsertPullRequest(pr)
-      // Keep posted-comment reply counts fresh for the list badges.
-      for (const prId of repo.getPrIdsWithPostedComments()) {
+      // Keep posted-comment reply counts fresh for the list badges. Run the
+      // per-PR Azure DevOps calls with bounded concurrency so a large queue
+      // refreshes in seconds rather than minutes (sequential was far too slow).
+      await mapWithConcurrency(repo.getPrIdsWithPostedComments(), 6, async (prId) => {
         try {
           await syncCommentThreads(prId)
         } catch (e) {
@@ -261,35 +281,38 @@ export function registerIpcHandlers(): void {
             error: (e as Error).message
           })
         }
-      }
+      })
       // Refresh the authoritative head commit for already-reviewed PRs so the
       // list can flag those that changed since review. The list tool's commit
       // field is unreliable, so use the same per-PR source the reviewer uses.
-      for (const pr of repo.listPullRequests()) {
-        if (pr.reviewStatus !== 'reviewed' && pr.reviewStatus !== 'in_progress') continue
-        try {
-          const head = await fetchPullRequestHeadCommit(pr.adoPrId)
-          if (head && head !== pr.headCommit) repo.updatePullRequestHeadCommit(pr.id, head)
-        } catch (e) {
-          logger.warn(`could not refresh head commit for pr id ${pr.id}`, {
-            error: (e as Error).message
-          })
-        }
-      }
-      // Enrich the list with live Azure DevOps metadata (draft, reviewer
-      // approvals/votes, comment count) — the MCP list omits reviewer votes.
-      await Promise.all(
-        repo.listPullRequests().map(async (pr) => {
+      await mapWithConcurrency(
+        repo
+          .listPullRequests()
+          .filter((pr) => pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress'),
+        6,
+        async (pr) => {
           try {
-            const meta = await fetchPullRequestListMeta(pr.adoPrId)
-            if (meta) repo.updatePrAdoMeta(pr.id, meta)
+            const head = await fetchPullRequestHeadCommit(pr.adoPrId)
+            if (head && head !== pr.headCommit) repo.updatePullRequestHeadCommit(pr.id, head)
           } catch (e) {
-            logger.warn(`could not fetch ADO metadata for pr id ${pr.id}`, {
+            logger.warn(`could not refresh head commit for pr id ${pr.id}`, {
               error: (e as Error).message
             })
           }
-        })
+        }
       )
+      // Enrich the list with live Azure DevOps metadata (draft, reviewer
+      // approvals/votes, comment count) — the MCP list omits reviewer votes.
+      await mapWithConcurrency(repo.listPullRequests(), 6, async (pr) => {
+        try {
+          const meta = await fetchPullRequestListMeta(pr.adoPrId)
+          if (meta) repo.updatePrAdoMeta(pr.id, meta)
+        } catch (e) {
+          logger.warn(`could not fetch ADO metadata for pr id ${pr.id}`, {
+            error: (e as Error).message
+          })
+        }
+      })
       return ok(repo.listPullRequests())
     } catch (e) {
       return fail(e)
