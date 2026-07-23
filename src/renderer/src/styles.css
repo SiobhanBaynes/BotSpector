@@ -507,31 +507,33 @@ a {
   font-weight: 600;
   font-size: 12px;
 }
-/* Fixed column widths so every queue section's table lines up. */
+/* Fixed column widths so every queue section's table lines up. The title has no
+   fixed width, so it absorbs the remaining space; keep the other columns lean so
+   the title is always the widest, most legible column. */
 .queue-table {
   table-layout: fixed;
 }
 .queue-table .col-num {
-  width: 72px;
+  width: 64px;
 }
 .queue-table .col-author {
-  width: 140px;
-}
-.queue-table .col-branch {
-  width: 260px;
-}
-.queue-table .col-ado {
   width: 120px;
 }
+.queue-table .col-branch {
+  width: 160px;
+}
+.queue-table .col-ado {
+  width: 116px;
+}
 .queue-table .col-review {
-  width: 200px;
+  width: 190px;
 }
 .queue-table .col-actions {
-  width: 92px;
+  width: 88px;
 }
 /* When the window is too narrow, prioritise the title: collapse the branch
    first, then the Azure DevOps comment-count column, so the title keeps room. */
-@media (max-width: 1180px) {
+@media (max-width: 1080px) {
   .queue-table .col-branch {
     width: 0;
   }
@@ -539,7 +541,7 @@ a {
     display: none;
   }
 }
-@media (max-width: 960px) {
+@media (max-width: 900px) {
   .queue-table .col-ado {
     width: 0;
   }
