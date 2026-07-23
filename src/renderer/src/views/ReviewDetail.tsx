@@ -357,7 +357,13 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
               </button>
             </div>
             <div className="pr-description">
-              {pr.description.trim() ? pr.description : <span className="muted">No description.</span>}
+              {pr.description.trim() ? (
+                <div className="markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{pr.description}</ReactMarkdown>
+                </div>
+              ) : (
+                <span className="muted">No description.</span>
+              )}
             </div>
             {explanation && (
               <div className="explanation">

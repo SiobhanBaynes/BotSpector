@@ -924,6 +924,9 @@ a {
   max-height: 260px;
   overflow-y: auto;
 }
+.pr-description .markdown {
+  white-space: normal;
+}
 .bucket {
   margin-bottom: 20px;
   border-left: 4px solid var(--border);
