@@ -471,10 +471,7 @@ function FilterToggle({
 }: {
   label: string
   active: boolean
-  onClicReviewStale(pr)) {
-    return <span className="review-badge stale">Review stale</span>
-  }
-  if (isk: () => void
+  onClick: () => void
 }): JSX.Element {
   return (
     <button className={active ? 'filter-chip active' : 'filter-chip'} onClick={onClick}>
@@ -484,6 +481,9 @@ function FilterToggle({
 }
 
 function ReviewBadge({ pr }: { pr: PullRequest }): JSX.Element {
+  if (isReviewStale(pr)) {
+    return <span className="review-badge stale">Review stale</span>
+  }
   if (isStale(pr)) {
     return isReadyForReReview(pr) ? (
       <span className="review-badge ready-rereview">Ready for re-review</span>
