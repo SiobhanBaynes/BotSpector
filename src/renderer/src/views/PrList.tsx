@@ -54,15 +54,22 @@ function isMine(pr: PullRequest, myIdentity: string): boolean {
   return author === id || author.includes(id) || id.includes(author)
 }
 
-// A reviewed PR that has changed since we reviewed it (needs a re-review).
+// True when the source branch has moved on since we captured the reviewed commit.
+function commitChanged(pr: PullRequest): boolean {
+  return !!pr.reviewedCommit && !!pr.headCommit && pr.reviewedCommit !== pr.headCommit
+}
+
+// The AI has reviewed the PR but you haven't triaged it yet, and new commits have
+// landed since — the pending findings may no longer match the current code.
+function isReviewStale(pr: PullRequest): boolean {
+  return pr.reviewStatus === 'review_pending' && commitChanged(pr)
+}
+
+// A triaged/clean PR that has changed since we reviewed it (needs a re-review).
 function isStale(pr: PullRequest): boolean {
   return (
-    (pr.reviewStatus === 'reviewed' ||
-      pr.reviewStatus === 'in_progress' ||
-      pr.reviewStatus === 'review_pending') &&
-    !!pr.reviewedCommit &&
-    !!pr.headCommit &&
-    pr.reviewedCommit !== pr.headCommit
+    (pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress') &&
+    commitChanged(pr)
   )
 }
 
@@ -192,6 +199,9 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   // A stale PR is "ready for re-review" once the author has engaged with every
   // comment we posted (a reply or a resolved thread), or we posted none. Until
   // then it's just "changed since review" and shouldn't demand our attention.
+  // AI-reviewed but not yet triaged, and the code changed underneath: its pending
+  // findings are stale and worth a fresh look before you spend time triaging.
+  const reviewStale = others.filter((pr) => isReviewStale(pr)).sort(byOldest)
   const readyForReReview = others
     .filter((pr) => isStale(pr) && isReadyForReReview(pr))
     .sort(byOldest)
@@ -199,7 +209,7 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
     .filter((pr) => isStale(pr) && !isReadyForReReview(pr))
     .sort(byOldest)
   const reviewPending = others
-    .filter((pr) => !isStale(pr) && pr.reviewStatus === 'review_pending')
+    .filter((pr) => !isReviewStale(pr) && pr.reviewStatus === 'review_pending')
     .sort(byOldest)
   const inProgress = others
     .filter((pr) => !isStale(pr) && pr.reviewStatus === 'in_progress')
@@ -208,6 +218,7 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
     .filter(
       (pr) =>
         !isStale(pr) &&
+        !isReviewStale(pr) &&
         pr.reviewStatus !== 'review_pending' &&
         pr.reviewStatus !== 'in_progress'
     )
@@ -274,6 +285,16 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           title="Ready for re-review"
           hint="Changed and the author has addressed your comments"
           prs={readyForReReview}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {reviewStale.length > 0 && (
+        <PrSection
+          title="Review stale"
+          hint="AI reviewed, but new commits landed before you triaged it"
+          prs={reviewStale}
           myIdentity={myIdentity}
           onOpen={onOpen}
           onStatus={changeStatus}
@@ -450,7 +471,10 @@ function FilterToggle({
 }: {
   label: string
   active: boolean
-  onClick: () => void
+  onClicReviewStale(pr)) {
+    return <span className="review-badge stale">Review stale</span>
+  }
+  if (isk: () => void
 }): JSX.Element {
   return (
     <button className={active ? 'filter-chip active' : 'filter-chip'} onClick={onClick}>
