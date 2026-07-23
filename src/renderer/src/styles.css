@@ -778,6 +778,40 @@ a {
   color: var(--text);
   font: inherit;
 }
+.chat-pinned {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  border: 1px solid rgba(56, 139, 253, 0.4);
+  background: rgba(56, 139, 253, 0.12);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.chat-pinned-label {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+.chat-pinned-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-pinned-remove {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.chat-pinned-remove:hover {
+  color: var(--text);
+}
 
 /* review detail */
 .review-meta {

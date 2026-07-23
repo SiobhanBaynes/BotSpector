@@ -15,9 +15,11 @@ interface Props {
   model: string
   /** External request to open (and scroll to) a specific file. */
   request?: FileRequest | null
+  /** Pin a file's change to the chat composer and jump to the Chat tab. */
+  onChatAbout?: (path: string) => void
 }
 
-export function FilesTab({ prId, model, request }: Props): JSX.Element {
+export function FilesTab({ prId, model, request, onChatAbout }: Props): JSX.Element {
   const [files, setFiles] = useState<ChangedFile[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -151,6 +153,14 @@ export function FilesTab({ prId, model, request }: Props): JSX.Element {
             {open[f.path] && (
               <div className="file-diff">
                 <div className="file-diff-actions">
+                  {onChatAbout && (
+                    <button
+                      className="btn small-btn"
+                      onClick={() => onChatAbout(f.path)}
+                    >
+                      💬 Chat about this change
+                    </button>
+                  )}
                   <button
                     className="btn small-btn"
                     onClick={() => void explainChange(f.path)}

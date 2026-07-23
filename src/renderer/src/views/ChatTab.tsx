@@ -1,19 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { ChatMessage } from '../../../shared/types'
+import type { ChatMessage, PinnedChange } from '../../../shared/types'
 
 interface Props {
   prId: number
   model: string
+  /** A file change pinned from the Files tab to attach to the next message. */
+  pinnedChange?: PinnedChange | null
+  /** Clear the pinned change (after sending or when the user removes it). */
+  onClearPinnedChange?: () => void
 }
 
-export function ChatTab({ prId, model }: Props): JSX.Element {
+export function ChatTab({ prId, model, pinnedChange, onClearPinnedChange }: Props): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // Focus the composer when a change is pinned from the Files tab.
+  useEffect(() => {
+    if (pinnedChange) inputRef.current?.focus()
+  }, [pinnedChange?.nonce])
 
   // Load the persisted conversation for this PR (and reset when it changes).
   useEffect(() => {
@@ -36,14 +46,20 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
 
   async function send(): Promise<void> {
     const text = input.trim()
-    if (!text || busy) return
+    if ((!text && !pinnedChange) || busy) return
+    // When a change is pinned, prefix the message with a reference to the file
+    // so the assistant knows which change we're asking about.
+    const content = pinnedChange
+      ? `Regarding the change in \`${pinnedChange.path}\`:\n\n${text}`.trim()
+      : text
     // Optimistically show the user's message; the server persists on success.
-    setMessages((m) => [...m, { role: 'user', content: text }])
+    setMessages((m) => [...m, { role: 'user', content }])
     setInput('')
+    onClearPinnedChange?.()
     setBusy(true)
     setError(null)
     try {
-      const res = await window.api.chatAboutPr(prId, text, model)
+      const res = await window.api.chatAboutPr(prId, content, model)
       if (!res.ok) throw new Error(res.error)
       setMessages((m) => [...m, { role: 'assistant', content: res.data }])
     } catch (e) {
@@ -120,8 +136,23 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
 
       {error && <div className="banner err">{error}</div>}
 
+      {pinnedChange && (
+        <div className="chat-pinned">
+          <span className="chat-pinned-label">📌 Change:</span>
+          <span className="chat-pinned-path mono">{pinnedChange.path}</span>
+          <button
+            className="chat-pinned-remove"
+            title="Remove pinned change"
+            onClick={() => onClearPinnedChange?.()}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div className="chat-input-row">
         <textarea
+          ref={inputRef}
           className="chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -130,7 +161,11 @@ export function ChatTab({ prId, model }: Props): JSX.Element {
           rows={2}
           disabled={busy}
         />
-        <button className="btn primary" onClick={() => void send()} disabled={busy || !input.trim()}>
+        <button
+          className="btn primary"
+          onClick={() => void send()}
+          disabled={busy || (!input.trim() && !pinnedChange)}
+        >
           {busy ? '…' : 'Send'}
         </button>
       </div>

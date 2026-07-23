@@ -6,6 +6,7 @@ import type {
   FindingStatus,
   PostedComment,
   PrAdoDetails,
+  PinnedChange,
   PullRequest,
   Review,
   ReviewStatus
@@ -39,10 +40,16 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [tab, setTab] = useState<Tab>('review')
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null)
+  const [pinnedChange, setPinnedChange] = useState<PinnedChange | null>(null)
 
   const openInFiles = useCallback((path: string, line: number | null) => {
     setTab('files')
     setFileRequest({ path, line, nonce: Date.now() })
+  }, [])
+
+  const chatAboutChange = useCallback((path: string) => {
+    setPinnedChange({ path, nonce: Date.now() })
+    setTab('chat')
   }, [])
 
   const load = useCallback(async () => {
@@ -408,12 +415,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
 
       {/* Files tab stays mounted so it prefetches diffs in the background. */}
       <div style={{ display: tab === 'files' ? 'block' : 'none' }}>
-        <FilesTab prId={prId} model={selectedModel} request={fileRequest} />
+        <FilesTab prId={prId} model={selectedModel} request={fileRequest} onChatAbout={chatAboutChange} />
       </div>
 
       {/* Chat tab stays mounted so its conversation survives tab switches. */}
       <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
-        <ChatTab prId={prId} model={selectedModel} />
+        <ChatTab prId={prId} model={selectedModel} pinnedChange={pinnedChange} onClearPinnedChange={() => setPinnedChange(null)} />
       </div>
 
       {tab === 'review' && priorComments.length > 0 && (

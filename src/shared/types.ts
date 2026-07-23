@@ -162,6 +162,12 @@ export interface DiffLine {
   newLine: number | null
 }
 
+// A file change pinned from the Files tab to be attached to the next chat message.
+export interface PinnedChange {
+  path: string
+  nonce: number
+}
+
 export interface CodeSnippet {
   filePath: string
   targetLine: number | null
