@@ -229,12 +229,14 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
       <div className="prlist-header">
         <h1>Review Queue</h1>
         <div className="prlist-actions">
-          {lastRefreshed && (
+          {lastRefreshed ? (
             <span className="muted small">
-              {bgBusy ? 'Updating…' : `Updated ${lastRefreshed.toLocaleTimeString()}`}
+              Updated {lastRefreshed.toLocaleTimeString()}
+              {bgBusy && ' · Updating…'}
             </span>
+          ) : (
+            bgBusy && <span className="muted small">Updating…</span>
           )}
-          {!lastRefreshed && bgBusy && <span className="muted small">Updating…</span>}
           <button className="btn" onClick={() => refresh()} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
