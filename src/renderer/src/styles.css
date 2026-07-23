@@ -529,6 +529,24 @@ a {
 .queue-table .col-actions {
   width: 92px;
 }
+/* When the window is too narrow, prioritise the title: collapse the branch
+   first, then the Azure DevOps comment-count column, so the title keeps room. */
+@media (max-width: 1180px) {
+  .queue-table .col-branch {
+    width: 0;
+  }
+  .queue-table .cell-branch {
+    display: none;
+  }
+}
+@media (max-width: 960px) {
+  .queue-table .col-ado {
+    width: 0;
+  }
+  .queue-table .cell-ado {
+    display: none;
+  }
+}
 .queue-table td,
 .queue-table th {
   overflow: hidden;

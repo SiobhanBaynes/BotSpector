@@ -394,8 +394,8 @@ function PrSection({
             <th>#</th>
             <th>Title</th>
             <th>Author</th>
-            <th>Branch</th>
-            <th>Azure DevOps</th>
+            <th className="cell-branch">Branch</th>
+            <th className="cell-ado">Azure DevOps</th>
             <th>Review</th>
             <th></th>
           </tr>
@@ -410,10 +410,10 @@ function PrSection({
                 {isMine(pr, myIdentity) && <span className="mine-badge">Mine</span>}
               </td>
               <td>{pr.author}</td>
-              <td className="mono small">
+              <td className="mono small cell-branch">
                 {pr.sourceBranch} → {pr.targetBranch}
               </td>
-              <td className="small ado-activity">
+              <td className="small ado-activity cell-ado">
                 <span className="ado-stat" title="Unresolved / total comment threads">
                   💬 {pr.unresolvedCommentCount} / {pr.commentCount}
                 </span>
