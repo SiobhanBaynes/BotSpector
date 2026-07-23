@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type {
   CopilotModel,
   FindingStatus,
@@ -360,7 +362,9 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             {explanation && (
               <div className="explanation">
                 <strong>In plain language</strong>
-                <p>{explanation}</p>
+                <div className="markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{explanation}</ReactMarkdown>
+                </div>
               </div>
             )}
           </div>

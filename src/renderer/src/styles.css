@@ -1086,6 +1086,9 @@ a {
   padding: 10px 12px;
   margin: 10px 0;
 }
+.explanation .markdown {
+  margin-top: 6px;
+}
 .comment-editor {
   display: block;
   width: 100%;

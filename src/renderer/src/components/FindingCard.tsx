@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { CodeSnippet, Finding, FindingStatus, ResolutionAssessment } from '../../../shared/types'
 
 interface Props {
@@ -249,7 +251,9 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
           {finding.explanation && (
             <div className="explanation">
               <strong>Explanation</strong>
-              <p>{finding.explanation}</p>
+              <div className="markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{finding.explanation}</ReactMarkdown>
+              </div>
             </div>
           )}
 
