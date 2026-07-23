@@ -114,7 +114,7 @@ export function upsertPullRequest(
        VALUES (@adoPrId, @repo, @title, @description, @author, @status, @url, @sourceBranch, @targetBranch, @headCommit, @isDraft, @approvals, @reviewerCount, @updatedAt, 1)
        ON CONFLICT(ado_pr_id, repo) DO UPDATE SET
          title = excluded.title,
-         description = excluded.description,
+         description = CASE WHEN excluded.description != '' THEN excluded.description ELSE pull_requests.description END,
          author = excluded.author,
          status = excluded.status,
          url = excluded.url,
