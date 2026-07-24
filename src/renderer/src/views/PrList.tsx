@@ -10,21 +10,25 @@ interface Props {
 const AUTO_REFRESH_MS = 3 * 60 * 1000
 
 interface Filters {
-  excludeMine: boolean
+  showMine: boolean
+  showNotMine: boolean
   excludeDrafts: boolean
   approved1: boolean
   approved2: boolean
   openComments: boolean
   showDeclined: boolean
+  showApproved: boolean
 }
 
 const DEFAULT_FILTERS: Filters = {
-  excludeMine: false,
+  showMine: true,
+  showNotMine: true,
   excludeDrafts: false,
   approved1: false,
   approved2: false,
   openComments: false,
-  showDeclined: false
+  showDeclined: false,
+  showApproved: false
 }
 
 const FILTERS_KEY = 'botspector.prFilters'
@@ -32,16 +36,31 @@ const FILTERS_KEY = 'botspector.prFilters'
 function loadFilters(): Filters {
   try {
     const raw = localStorage.getItem(FILTERS_KEY)
-    if (raw) return { ...DEFAULT_FILTERS, ...(JSON.parse(raw) as Partial<Filters>) }
+    if (raw) {
+      const stored = JSON.parse(raw) as Partial<Filters> & { excludeMine?: boolean }
+      const merged: Filters = { ...DEFAULT_FILTERS, ...stored }
+      // Migrate the old single "Exclude mine" toggle to the Mine/Not mine pair.
+      if (stored.excludeMine !== undefined && stored.showNotMine === undefined) {
+        merged.showMine = !stored.excludeMine
+        merged.showNotMine = true
+      }
+      return merged
+    }
   } catch {
     // ignore malformed stored value
   }
-  // Migrate the old standalone "exclude mine" preference.
-  return { ...DEFAULT_FILTERS, excludeMine: localStorage.getItem('botspector.excludeMine') === 'true' }
+  // Migrate the very old standalone "exclude mine" preference.
+  const excludeMine = localStorage.getItem('botspector.excludeMine') === 'true'
+  return { ...DEFAULT_FILTERS, showMine: !excludeMine }
 }
 
 function matchesFilters(pr: PullRequest, filters: Filters, myIdentity: string): boolean {
-  if (filters.excludeMine && isMine(pr, myIdentity)) return false
+  // Author filter: when neither (or both) option is ticked, show everyone.
+  if (filters.showMine || filters.showNotMine) {
+    const mine = isMine(pr, myIdentity)
+    if (mine && !filters.showMine) return false
+    if (!mine && !filters.showNotMine) return false
+  }
   if (filters.excludeDrafts && pr.isDraft) return false
   if (filters.approved1 && pr.approvals < 1) return false
   if (filters.approved2 && pr.approvals < 2) return false
@@ -59,6 +78,12 @@ function isMine(pr: PullRequest, myIdentity: string): boolean {
 // A PR you've explicitly chosen not to review; parked out of the main queue.
 function isDeclined(pr: PullRequest): boolean {
   return pr.reviewStatus === 'declined'
+}
+
+// A PR you've already voted "approve" (or "approve with suggestions") on in
+// Azure DevOps — done from your side, so parked out of the actionable queues.
+function isApprovedByMe(pr: PullRequest): boolean {
+  return pr.myVote >= 5
 }
 
 // True when the source branch has moved on since we captured the reviewed commit.
@@ -204,8 +229,13 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   const mine = triageable.filter((pr) => isMine(pr, myIdentity)).sort(byOldest)
   // PRs we've already approved in Azure DevOps are done from our side, so keep
   // them out of the actionable queue (ADO resets our vote if they change again).
+  // They're parked in their own (collapsible) "Approved by you" section so you
+  // can still find them via the "Show approved" filter.
+  const approvedByMe = triageable
+    .filter((pr) => !isMine(pr, myIdentity) && isApprovedByMe(pr))
+    .sort(byOldest)
   const others = triageable.filter(
-    (pr) => !isMine(pr, myIdentity) && pr.myVote < 5
+    (pr) => !isMine(pr, myIdentity) && !isApprovedByMe(pr)
   )
   // A stale PR is "ready for re-review" once the author has engaged with every
   // comment we posted (a reply or a resolved thread), or we posted none. Until
@@ -257,36 +287,62 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
       <div className="pr-filter-bar">
         <span className="muted small">Filter</span>
         {myIdentity.trim() && (
-          <FilterToggle
-            label="Exclude mine"
-            active={filters.excludeMine}
-            onClick={() => toggleFilter('excludeMine')}
+          <FilterDropdown
+            label="Author"
+            items={[
+              { label: 'Mine', active: filters.showMine, onToggle: () => toggleFilter('showMine') },
+              {
+                label: 'Not mine',
+                active: filters.showNotMine,
+                onToggle: () => toggleFilter('showNotMine')
+              }
+            ]}
           />
         )}
-        <FilterToggle
-          label="Exclude drafts"
-          active={filters.excludeDrafts}
-          onClick={() => toggleFilter('excludeDrafts')}
+        <FilterDropdown
+          label="Approvals"
+          items={[
+            {
+              label: '1+ approval',
+              active: filters.approved1,
+              onToggle: () => toggleFilter('approved1')
+            },
+            {
+              label: '2+ approvals',
+              active: filters.approved2,
+              onToggle: () => toggleFilter('approved2')
+            }
+          ]}
         />
-        <FilterToggle
-          label="1+ approval"
-          active={filters.approved1}
-          onClick={() => toggleFilter('approved1')}
+        <FilterDropdown
+          label="Status"
+          items={[
+            {
+              label: 'Exclude drafts',
+              active: filters.excludeDrafts,
+              onToggle: () => toggleFilter('excludeDrafts')
+            },
+            {
+              label: 'Open comments',
+              active: filters.openComments,
+              onToggle: () => toggleFilter('openComments')
+            }
+          ]}
         />
-        <FilterToggle
-          label="2+ approvals"
-          active={filters.approved2}
-          onClick={() => toggleFilter('approved2')}
-        />
-        <FilterToggle
-          label="Open comments"
-          active={filters.openComments}
-          onClick={() => toggleFilter('openComments')}
-        />
-        <FilterToggle
-          label={`Show declined${declined.length ? ` (${declined.length})` : ''}`}
-          active={filters.showDeclined}
-          onClick={() => toggleFilter('showDeclined')}
+        <FilterDropdown
+          label="Show"
+          items={[
+            {
+              label: `Approved${approvedByMe.length ? ` (${approvedByMe.length})` : ''}`,
+              active: filters.showApproved,
+              onToggle: () => toggleFilter('showApproved')
+            },
+            {
+              label: `Declined${declined.length ? ` (${declined.length})` : ''}`,
+              active: filters.showDeclined,
+              onToggle: () => toggleFilter('showDeclined')
+            }
+          ]}
         />
       </div>
 
@@ -363,6 +419,16 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           title="Your pull requests"
           hint="Raised by you"
           prs={mine}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {filters.showApproved && approvedByMe.length > 0 && (
+        <PrSection
+          title="Approved by you"
+          hint="You've already approved these in Azure DevOps"
+          prs={approvedByMe}
           myIdentity={myIdentity}
           onOpen={onOpen}
           onStatus={changeStatus}
@@ -493,19 +559,48 @@ function PrSection({
   )
 }
 
-function FilterToggle({
+function FilterDropdown({
   label,
-  active,
-  onClick
+  items
 }: {
   label: string
-  active: boolean
-  onClick: () => void
+  items: { label: string; active: boolean; onToggle: () => void }[]
 }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const activeCount = items.filter((i) => i.active).length
+
+  // Close the menu when clicking anywhere outside it.
+  useEffect(() => {
+    if (!open) return
+    const onDocMouseDown = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [open])
+
   return (
-    <button className={active ? 'filter-chip active' : 'filter-chip'} onClick={onClick}>
-      {label}
-    </button>
+    <div className="filter-dropdown" ref={ref}>
+      <button
+        className={activeCount ? 'filter-chip active' : 'filter-chip'}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {label}
+        {activeCount > 0 && <span className="filter-chip-count">{activeCount}</span>}
+        <span className="filter-caret">▾</span>
+      </button>
+      {open && (
+        <div className="filter-menu">
+          {items.map((item) => (
+            <label key={item.label} className="filter-menu-item">
+              <input type="checkbox" checked={item.active} onChange={item.onToggle} />
+              <span>{item.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
