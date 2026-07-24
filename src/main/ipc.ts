@@ -17,6 +17,7 @@ import type {
   ResolutionAssessment,
   Review,
   ReviewStatus,
+  ReviewSummary,
   Settings
 } from '../shared/types'
 import { secrets } from './secrets'
@@ -356,6 +357,14 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.prGetReview, (_e, prId: number): IpcResult<Review | null> => {
     try {
       return ok(repo.getReviewForPr(prId))
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  ipcMain.handle(IPC.prGetReviewHistory, (_e, prId: number): IpcResult<ReviewSummary[]> => {
+    try {
+      return ok(repo.listReviewSummaries(prId))
     } catch (e) {
       return fail(e)
     }

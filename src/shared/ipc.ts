@@ -25,6 +25,7 @@ export const IPC = {
   prListCached: 'pr:listCached',
   prGet: 'pr:get',
   prGetReview: 'pr:getReview',
+  prGetReviewHistory: 'pr:getReviewHistory',
   prGetPostedComments: 'pr:getPostedComments',
   prSetReviewStatus: 'pr:setReviewStatus',
   prGetAdoDetails: 'pr:getAdoDetails',

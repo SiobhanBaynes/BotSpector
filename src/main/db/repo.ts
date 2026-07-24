@@ -8,7 +8,8 @@ import type {
   PostedComment,
   PullRequest,
   Review,
-  ReviewStatus
+  ReviewStatus,
+  ReviewSummary
 } from '../../shared/types'
 
 // ---- settings ----
@@ -612,6 +613,60 @@ export function getReviewForPr(prId: number): Review | null {
     status: review.status as Review['status'],
     findings
   }
+}
+
+/**
+ * Summarise every review run on a PR: one entry per model, newest first, listing
+ * the findings that model created (raised itself) and the existing findings it
+ * "+1'd" (agreed with via a contribution). Lets the UI show a history of which
+ * models reviewed and what each one contributed.
+ */
+export function listReviewSummaries(prId: number): ReviewSummary[] {
+  const db = getDb()
+  const reviews = db
+    .prepare(
+      `SELECT id, model, created_at, reviewed_commit
+       FROM reviews WHERE pr_id = ? ORDER BY created_at DESC`
+    )
+    .all(prId) as Array<{
+    id: number
+    model: string
+    created_at: string
+    reviewed_commit: string | null
+  }>
+
+  // All findings on the PR, with their creator model and contributor list, so we
+  // can attribute created vs. contributed per model without extra queries.
+  const findingRows = db
+    .prepare(
+      `SELECT f.public_id AS publicId, f.model AS model, f.contributors AS contributors
+       FROM findings f JOIN reviews r ON r.id = f.review_id
+       WHERE r.pr_id = ?
+       ORDER BY f.id ASC`
+    )
+    .all(prId) as Array<{ publicId: string; model: string | null; contributors: string | null }>
+
+  const parsed = findingRows.map((f) => {
+    let contributors: string[] = []
+    try {
+      const arr = JSON.parse(f.contributors ?? '[]')
+      if (Array.isArray(arr)) contributors = arr.filter((m): m is string => typeof m === 'string')
+    } catch {
+      contributors = []
+    }
+    return { publicId: f.publicId, model: f.model ?? '', contributors }
+  })
+
+  return reviews.map((r) => ({
+    id: r.id,
+    model: r.model,
+    createdAt: r.created_at,
+    reviewedCommit: r.reviewed_commit ?? null,
+    createdFindings: parsed.filter((f) => f.model === r.model).map((f) => f.publicId),
+    contributedFindings: parsed
+      .filter((f) => f.model !== r.model && f.contributors.includes(r.model))
+      .map((f) => f.publicId)
+  }))
 }
 
 export function getFinding(findingId: number): Finding | null {

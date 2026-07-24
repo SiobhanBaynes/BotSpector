@@ -823,6 +823,73 @@ a {
   gap: 16px;
   margin: 12px 0;
 }
+.review-history {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  margin: 0 0 14px;
+}
+.review-history > summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 13px;
+  user-select: none;
+}
+.review-history > summary .count {
+  color: var(--muted);
+}
+.review-history-body {
+  padding: 4px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-history-row {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.review-history-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.review-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.rh-model {
+  font-size: 13px;
+  color: var(--text);
+}
+.review-history-findings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.rh-label {
+  color: var(--muted);
+}
+.rh-label:not(:first-child) {
+  margin-left: 10px;
+}
+.rh-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.rh-chip.created {
+  background: rgba(76, 139, 245, 0.15);
+  color: var(--accent);
+  border-color: rgba(76, 139, 245, 0.4);
+}
+.rh-chip.plusone {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--ok);
+  border-color: rgba(63, 185, 80, 0.4);
+}
 .tab-bar {
   display: flex;
   gap: 4px;

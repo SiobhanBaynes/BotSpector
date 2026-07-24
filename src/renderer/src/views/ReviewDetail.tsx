@@ -9,7 +9,8 @@ import type {
   PinnedChange,
   PullRequest,
   Review,
-  ReviewStatus
+  ReviewStatus,
+  ReviewSummary
 } from '../../../shared/types'
 import { FINDING_BUCKETS } from '../../../shared/types'
 import { FindingCard } from '../components/FindingCard'
@@ -28,6 +29,7 @@ type Tab = 'review' | 'files' | 'chat'
 export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
   const [review, setReview] = useState<Review | null>(null)
+  const [reviewHistory, setReviewHistory] = useState<ReviewSummary[]>([])
   const [postedComments, setPostedComments] = useState<PostedComment[]>([])
   const [adoDetails, setAdoDetails] = useState<PrAdoDetails | null>(null)
   const [models, setModels] = useState<CopilotModel[]>([])
@@ -53,13 +55,15 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   }, [])
 
   const load = useCallback(async () => {
-    const [prRes, reviewRes, postedRes] = await Promise.all([
+    const [prRes, reviewRes, postedRes, historyRes] = await Promise.all([
       window.api.getPullRequest(prId),
       window.api.getReview(prId),
-      window.api.getPostedComments(prId)
+      window.api.getPostedComments(prId),
+      window.api.getReviewHistory(prId)
     ])
     if (prRes.ok) setPr(prRes.data)
     if (postedRes.ok) setPostedComments(postedRes.data)
+    if (historyRes.ok) setReviewHistory(historyRes.data)
     if (reviewRes.ok) {
       setReview(reviewRes.data)
       // If any comments were posted, refresh their thread status in the background.
@@ -448,6 +452,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             )}
           </div>
 
+          {reviewHistory.length > 0 && <ReviewHistory history={reviewHistory} />}
+
           <div className="filter-bar">
             <FilterChip label="All" count={total} active={filter === 'all'} onClick={() => setFilter('all')} />
             <FilterChip label="Open" count={counts.open} active={filter === 'open'} onClick={() => setFilter('open')} />
@@ -500,6 +506,50 @@ function FilterChip({
     <button className={active ? 'chip active' : 'chip'} onClick={onClick}>
       {label} <span className="chip-count">{count}</span>
     </button>
+  )
+}
+
+// A history of every model that has reviewed this PR, showing which findings it
+// raised itself and which existing findings it agreed with (+1'd).
+function ReviewHistory({ history }: { history: ReviewSummary[] }): JSX.Element {
+  return (
+    <details className="review-history">
+      <summary>
+        Review history <span className="count">{history.length}</span>
+      </summary>
+      <div className="review-history-body">
+        {history.map((r) => (
+          <div key={r.id} className="review-history-row">
+            <div className="review-history-head">
+              <span className="rh-model mono">{r.model}</span>
+              <span className="muted small">{new Date(r.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="review-history-findings small">
+              <span className="rh-label">Raised:</span>
+              {r.createdFindings.length > 0 ? (
+                r.createdFindings.map((id) => (
+                  <span key={id} className="rh-chip created mono">
+                    {id}
+                  </span>
+                ))
+              ) : (
+                <span className="muted">none</span>
+              )}
+              <span className="rh-label">+1'd:</span>
+              {r.contributedFindings.length > 0 ? (
+                r.contributedFindings.map((id) => (
+                  <span key={id} className="rh-chip plusone mono">
+                    {id}
+                  </span>
+                ))
+              ) : (
+                <span className="muted">none</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }
 

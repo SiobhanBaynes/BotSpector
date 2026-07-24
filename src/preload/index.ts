@@ -16,6 +16,7 @@ import type {
   ResolutionAssessment,
   Review,
   ReviewStatus,
+  ReviewSummary,
   Settings
 } from '../shared/types'
 
@@ -92,6 +93,8 @@ const api = {
     ipcRenderer.invoke(IPC.prExplainFileChange, prId, path, model),
   refreshComments: (prId: number): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.prRefreshComments, prId),
+  getReviewHistory: (prId: number): Promise<IpcResult<ReviewSummary[]>> =>
+    ipcRenderer.invoke(IPC.prGetReviewHistory, prId),
   getChangedFiles: (prId: number): Promise<IpcResult<ChangedFile[]>> =>
     ipcRenderer.invoke(IPC.prGetChangedFiles, prId),
   getFileDiff: (prId: number, path: string): Promise<IpcResult<FileDiff>> =>

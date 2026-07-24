@@ -115,6 +115,17 @@ export interface Review {
   findings: Finding[]
 }
 
+// A per-model summary of a review run on a PR: which findings that model
+// created (raised itself) and which existing findings it "+1'd" (agreed with).
+export interface ReviewSummary {
+  id: number
+  model: string
+  createdAt: string
+  reviewedCommit: string | null
+  createdFindings: string[]
+  contributedFindings: string[]
+}
+
 // A comment we posted to Azure DevOps, tracked at the PR level so its thread
 // status and conversation survive re-reviews (which replace reviews/findings).
 export interface PostedComment {
