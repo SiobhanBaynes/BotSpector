@@ -14,6 +14,7 @@ export type ReviewStatus =
   | 'review_pending'
   | 'in_progress'
   | 'reviewed'
+  | 'declined'
   | 'error'
 
 export interface Settings {

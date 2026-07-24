@@ -590,6 +590,10 @@ a {
   background: rgba(248, 81, 73, 0.2);
   color: var(--err);
 }
+.review-badge.declined {
+  background: rgba(139, 148, 158, 0.2);
+  color: var(--muted);
+}
 .review-badge.stale {
   background: rgba(227, 179, 65, 0.2);
   color: var(--medium);

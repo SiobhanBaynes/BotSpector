@@ -15,6 +15,7 @@ interface Filters {
   approved1: boolean
   approved2: boolean
   openComments: boolean
+  showDeclined: boolean
 }
 
 const DEFAULT_FILTERS: Filters = {
@@ -22,7 +23,8 @@ const DEFAULT_FILTERS: Filters = {
   excludeDrafts: false,
   approved1: false,
   approved2: false,
-  openComments: false
+  openComments: false,
+  showDeclined: false
 }
 
 const FILTERS_KEY = 'botspector.prFilters'
@@ -52,6 +54,11 @@ function isMine(pr: PullRequest, myIdentity: string): boolean {
   if (!id) return false
   const author = pr.author.toLowerCase()
   return author === id || author.includes(id) || id.includes(author)
+}
+
+// A PR you've explicitly chosen not to review; parked out of the main queue.
+function isDeclined(pr: PullRequest): boolean {
+  return pr.reviewStatus === 'declined'
 }
 
 // True when the source branch has moved on since we captured the reviewed commit.
@@ -190,10 +197,14 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   // Build the review queue: PRs needing re-review first, then in-progress, then
   // oldest first; our own PRs are pulled out into their own section.
   const visible = prs.filter((pr) => matchesFilters(pr, filters, myIdentity))
-  const mine = visible.filter((pr) => isMine(pr, myIdentity)).sort(byOldest)
+  // Declined PRs are parked in their own (collapsible) section and kept out of
+  // every actionable queue below.
+  const declined = visible.filter((pr) => isDeclined(pr)).sort(byOldest)
+  const triageable = visible.filter((pr) => !isDeclined(pr))
+  const mine = triageable.filter((pr) => isMine(pr, myIdentity)).sort(byOldest)
   // PRs we've already approved in Azure DevOps are done from our side, so keep
   // them out of the actionable queue (ADO resets our vote if they change again).
-  const others = visible.filter(
+  const others = triageable.filter(
     (pr) => !isMine(pr, myIdentity) && pr.myVote < 5
   )
   // A stale PR is "ready for re-review" once the author has engaged with every
@@ -272,11 +283,16 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           active={filters.openComments}
           onClick={() => toggleFilter('openComments')}
         />
+        <FilterToggle
+          label={`Show declined${declined.length ? ` (${declined.length})` : ''}`}
+          active={filters.showDeclined}
+          onClick={() => toggleFilter('showDeclined')}
+        />
       </div>
 
       {error && <div className="banner err">{error}</div>}
 
-      {!loading && !bgBusy && visible.length === 0 && !error && (
+      {!loading && !bgBusy && triageable.length === 0 && (!filters.showDeclined || declined.length === 0) && !error && (
         <div className="empty">
           <p>Nothing to review here 👀 — try Refresh, adjust the filters, or check your Azure DevOps settings.</p>
         </div>
@@ -347,6 +363,16 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
           title="Your pull requests"
           hint="Raised by you"
           prs={mine}
+          myIdentity={myIdentity}
+          onOpen={onOpen}
+          onStatus={changeStatus}
+        />
+      )}
+      {filters.showDeclined && declined.length > 0 && (
+        <PrSection
+          title="Declined"
+          hint="You chose not to review these"
+          prs={declined}
           myIdentity={myIdentity}
           onOpen={onOpen}
           onStatus={changeStatus}
@@ -431,13 +457,13 @@ function PrSection({
                     className="mini-status-select"
                     title="Set BotSpector review status"
                     value={
-                      ['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus)
+                      ['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus)
                         ? pr.reviewStatus
                         : ''
                     }
                     onChange={(e) => onStatus(pr.id, e.target.value as ReviewStatus)}
                   >
-                    {!['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus) && (
+                    {!['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus) && (
                       <option value="" disabled>
                         —
                       </option>
@@ -445,6 +471,7 @@ function PrSection({
                     <option value="not_reviewed">Not reviewed</option>
                     <option value="in_progress">In progress</option>
                     <option value="reviewed">Reviewed</option>
+                    <option value="declined">Decline to review</option>
                   </select>
                   {pr.commentReplies > 0 && (
                     <span className="reply-badge" title="New replies on your posted comments">
@@ -483,6 +510,9 @@ function FilterToggle({
 }
 
 function ReviewBadge({ pr }: { pr: PullRequest }): JSX.Element {
+  if (isDeclined(pr)) {
+    return <span className="review-badge declined">Declined</span>
+  }
   if (isReviewStale(pr)) {
     return <span className="review-badge stale">Review stale</span>
   }
@@ -500,6 +530,7 @@ function ReviewBadge({ pr }: { pr: PullRequest }): JSX.Element {
     review_pending: 'Review pending',
     in_progress: 'In progress',
     reviewed: 'Reviewed',
+    declined: 'Declined',
     error: 'Error'
   }
   return <span className={`review-badge ${pr.reviewStatus}`}>{map[pr.reviewStatus]}</span>

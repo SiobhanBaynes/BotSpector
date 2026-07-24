@@ -229,13 +229,13 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             <select
               className="status-select"
               value={
-                pr && ['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus)
+                pr && ['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus)
                   ? pr.reviewStatus
                   : ''
               }
               onChange={(e) => void changeStatus(e.target.value as ReviewStatus)}
             >
-              {pr && !['not_reviewed', 'in_progress', 'reviewed'].includes(pr.reviewStatus) && (
+              {pr && !['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus) && (
                 <option value="" disabled>
                   {pr.reviewStatus === 'error'
                     ? 'Error'
@@ -247,6 +247,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
               <option value="not_reviewed">Not reviewed</option>
               <option value="in_progress">In progress</option>
               <option value="reviewed">Reviewed</option>
+              <option value="declined">Decline to review</option>
             </select>
           )}
         </div>
