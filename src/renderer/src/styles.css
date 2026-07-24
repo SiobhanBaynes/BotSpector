@@ -1388,4 +1388,22 @@ a {
 .ado-comment-body {
   margin-top: 2px;
 }
+.ado-thread-reply {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.ado-thread-reply .comment-editor {
+  width: 100%;
+}
+.ado-thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ado-thread-actions .spacer {
+  flex: 1;
+}
 

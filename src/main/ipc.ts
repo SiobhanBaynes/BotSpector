@@ -44,6 +44,7 @@ import {
   fetchChangedFiles,
   fetchFileContent,
   fetchPullRequestComments,
+  replyToPullRequestThread,
   postPullRequestComment
 } from './mcp/adoService'
 import {
@@ -591,6 +592,58 @@ export function registerIpcHandlers(): void {
         }
 
         return ok(await explainAdoComment({ filePath, line, commentText, diffText }, model))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prGetCodeSnippet,
+    async (
+      _e,
+      prId: number,
+      filePath: string,
+      line: number | null
+    ): Promise<IpcResult<CodeSnippet | null>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        if (!filePath) return ok(null)
+        const range = await fetchPullRequestDiffRange(pr.adoPrId)
+        const headCommit = range.head || pr.headCommit || undefined
+        const baseCommit = range.base || undefined
+        const after =
+          (await fetchFileContent(filePath, {
+            commit: headCommit,
+            branch: pr.sourceBranch || undefined
+          }).catch(() => null)) ?? ''
+        const before = baseCommit
+          ? ((await fetchFileContent(filePath, { commit: baseCommit }).catch(() => null)) ?? '')
+          : ''
+        return ok(buildDiffSnippet(filePath, before, after, line))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prReplyToComment,
+    async (
+      _e,
+      prId: number,
+      threadId: number,
+      content: string
+    ): Promise<IpcResult<AdoCommentThread[]>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const text = content.trim()
+        if (!text) throw new Error('Reply is empty')
+        await replyToPullRequestThread(pr.adoPrId, threadId, text)
+        // Return the refreshed threads so the UI shows the new reply immediately.
+        return ok(await fetchPullRequestComments(pr.adoPrId))
       } catch (e) {
         return fail(e)
       }

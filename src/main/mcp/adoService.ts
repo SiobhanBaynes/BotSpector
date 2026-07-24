@@ -719,6 +719,36 @@ export async function postPullRequestComment(
 }
 
 /**
+ * Post a reply into an existing Azure DevOps comment thread. Uses REST so we can
+ * target a specific thread (the MCP create-thread tool always starts a new one).
+ */
+export async function replyToPullRequestThread(
+  adoPrId: number,
+  threadId: number,
+  content: string
+): Promise<boolean> {
+  const cfg = restConfig()
+  if (!cfg) throw new Error('Azure DevOps is not configured')
+  const url = `${prRestUrl(cfg, adoPrId)}/threads/${threadId}/comments?api-version=7.1`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${cfg.auth}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ content, parentCommentId: 1, commentType: 'text' })
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(
+      `Failed to post reply (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`
+    )
+  }
+  return true
+}
+
+/**
  * Fetch the full PR description via the "get pull request" tool. The list tool
  * often omits the description, so we retrieve it on demand.
  */

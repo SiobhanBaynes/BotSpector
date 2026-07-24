@@ -105,6 +105,18 @@ const api = {
     model?: string
   ): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IPC.prExplainAdoComment, prId, filePath, line, commentText, model),
+  getCodeSnippet: (
+    prId: number,
+    filePath: string,
+    line: number | null
+  ): Promise<IpcResult<CodeSnippet | null>> =>
+    ipcRenderer.invoke(IPC.prGetCodeSnippet, prId, filePath, line),
+  replyToAdoComment: (
+    prId: number,
+    threadId: number,
+    content: string
+  ): Promise<IpcResult<AdoCommentThread[]>> =>
+    ipcRenderer.invoke(IPC.prReplyToComment, prId, threadId, content),
   getReviewHistory: (prId: number): Promise<IpcResult<ReviewSummary[]>> =>
     ipcRenderer.invoke(IPC.prGetReviewHistory, prId),
   getChangedFiles: (prId: number): Promise<IpcResult<ChangedFile[]>> =>

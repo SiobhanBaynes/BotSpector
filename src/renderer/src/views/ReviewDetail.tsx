@@ -430,7 +430,9 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         <FilesTab prId={prId} model={selectedModel} request={fileRequest} onChatAbout={chatAboutChange} />
       </div>
 
-      {tab === 'comments' && <AdoCommentsTab prId={prId} model={selectedModel} />}
+      {tab === 'comments' && (
+        <AdoCommentsTab prId={prId} model={selectedModel} onOpenInFiles={openInFiles} />
+      )}
 
       {/* Chat tab stays mounted so its conversation survives tab switches. */}
       <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
