@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  AdoCommentThread,
   AgentInstructions,
   ChangedFile,
   ChatMessage,
@@ -94,6 +95,16 @@ const api = {
     ipcRenderer.invoke(IPC.prExplainFileChange, prId, path, model),
   refreshComments: (prId: number): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.prRefreshComments, prId),
+  getAdoComments: (prId: number): Promise<IpcResult<AdoCommentThread[]>> =>
+    ipcRenderer.invoke(IPC.prGetAdoComments, prId),
+  explainAdoComment: (
+    prId: number,
+    filePath: string | null,
+    line: number | null,
+    commentText: string,
+    model?: string
+  ): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.prExplainAdoComment, prId, filePath, line, commentText, model),
   getReviewHistory: (prId: number): Promise<IpcResult<ReviewSummary[]>> =>
     ipcRenderer.invoke(IPC.prGetReviewHistory, prId),
   getChangedFiles: (prId: number): Promise<IpcResult<ChangedFile[]>> =>

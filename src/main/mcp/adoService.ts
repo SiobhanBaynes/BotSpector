@@ -1,7 +1,7 @@
 import { buildArgs, callTool, findTool, parseJsonFromText } from './adoClient'
 import { getSetting } from '../db/repo'
 import { secrets } from '../secrets'
-import type { ChangedFile, PrAdoDetails, PrReviewer, PullRequest } from '../../shared/types'
+import type { AdoCommentThread, ChangedFile, PrAdoDetails, PrReviewer, PullRequest } from '../../shared/types'
 
 /**
  * Higher-level Azure DevOps operations built on the MCP tools. These discover
@@ -539,6 +539,65 @@ export async function fetchPullRequestThreads(adoPrId: number): Promise<ThreadSt
       replies
     }
   })
+}
+
+/**
+ * Fetch every human-visible comment thread on a PR (including those raised by
+ * other reviewers, not just BotSpector's own). Skips purely-system threads
+ * (votes, status changes, ref updates) and anchors each thread to a file/line
+ * when the comment was made on code. Uses REST for the full thread payload.
+ */
+export async function fetchPullRequestComments(adoPrId: number): Promise<AdoCommentThread[]> {
+  const cfg = restConfig()
+  if (!cfg) return []
+  const url = `${prRestUrl(cfg, adoPrId)}/threads?api-version=7.1`
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) return []
+  const data = (await res.json()) as {
+    value?: Array<{
+      id?: number
+      status?: string
+      isDeleted?: boolean
+      threadContext?: {
+        filePath?: string
+        rightFileStart?: { line?: number }
+        leftFileStart?: { line?: number }
+      }
+      comments?: Array<{
+        author?: { displayName?: string; uniqueName?: string }
+        content?: string
+        commentType?: string
+        publishedDate?: string
+        lastUpdatedDate?: string
+        isDeleted?: boolean
+      }>
+    }>
+  }
+
+  const result: AdoCommentThread[] = []
+  for (const t of data.value ?? []) {
+    if (t.isDeleted) continue
+    const comments = (t.comments ?? []).filter(
+      (c) => !c.isDeleted && c.commentType !== 'system' && str(c.content).trim() !== ''
+    )
+    if (comments.length === 0) continue // system-only thread (vote/status/update)
+    const ctx = t.threadContext ?? {}
+    const line = ctx.rightFileStart?.line ?? ctx.leftFileStart?.line ?? null
+    result.push({
+      id: Number(t.id ?? 0),
+      status: typeof t.status === 'string' ? t.status : null,
+      filePath: ctx.filePath ? str(ctx.filePath).replace(/^\//, '') : null,
+      line: typeof line === 'number' ? line : null,
+      comments: comments.map((c) => ({
+        author: c.author?.displayName || c.author?.uniqueName || 'Unknown',
+        content: str(c.content),
+        date: str(c.publishedDate || c.lastUpdatedDate) || null
+      }))
+    })
+  }
+  return result
 }
 
 /**

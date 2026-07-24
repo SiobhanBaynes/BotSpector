@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { diffLines } from 'diff'
 import { IPC } from '../shared/ipc'
 import type {
+  AdoCommentThread,
   AgentInstructions,
   ChangedFile,
   ChatMessage,
@@ -42,6 +43,7 @@ import {
   fetchCurrentUserDisplayName,
   fetchChangedFiles,
   fetchFileContent,
+  fetchPullRequestComments,
   postPullRequestComment
 } from './mcp/adoService'
 import {
@@ -51,6 +53,7 @@ import {
   draftComment,
   explainFinding,
   explainFileChange,
+  explainAdoComment,
   explainPullRequest,
   extractFindingFromChat,
   refineComment,
@@ -526,6 +529,68 @@ export function registerIpcHandlers(): void {
           .slice(0, 12000)
 
         return ok(await explainFileChange(path, diffText, model))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prGetAdoComments,
+    async (_e, prId: number): Promise<IpcResult<AdoCommentThread[]>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        return ok(await fetchPullRequestComments(pr.adoPrId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prExplainAdoComment,
+    async (
+      _e,
+      prId: number,
+      filePath: string | null,
+      line: number | null,
+      commentText: string,
+      modelArg?: string
+    ): Promise<IpcResult<string>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const model = resolveModel(modelArg)
+
+        // Best-effort: attach the diff of the commented file so the explanation
+        // can reference the actual change. Never let this block the explanation.
+        let diffText: string | undefined
+        if (filePath) {
+          try {
+            const range = await fetchPullRequestDiffRange(pr.adoPrId)
+            const head = range.head || pr.headCommit || undefined
+            const base = range.base || undefined
+            const after =
+              (await fetchFileContent(filePath, { commit: head, branch: pr.sourceBranch }).catch(
+                () => null
+              )) ?? ''
+            const before = base
+              ? ((await fetchFileContent(filePath, { commit: base }).catch(() => null)) ?? '')
+              : ''
+            const diff = buildFileDiff(filePath, before, after)
+            const text = diff.lines
+              .filter((l) => l.kind !== 'gap')
+              .map((l) => (l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ' ') + l.text)
+              .join('\n')
+              .slice(0, 8000)
+            diffText = text || undefined
+          } catch {
+            // context is optional
+          }
+        }
+
+        return ok(await explainAdoComment({ filePath, line, commentText, diffText }, model))
       } catch (e) {
         return fail(e)
       }

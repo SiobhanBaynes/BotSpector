@@ -167,6 +167,24 @@ export interface AgentInstructions {
   defaultInstructions: string
 }
 
+// A comment (by any author, incl. human reviewers) on an Azure DevOps PR thread.
+export interface AdoComment {
+  author: string
+  content: string
+  date: string | null
+}
+
+// A comment thread on the Azure DevOps PR — including ones raised by other
+// people, not just those BotSpector posted. Anchored to a file/line when the
+// reviewer commented on code.
+export interface AdoCommentThread {
+  id: number
+  status: string | null
+  filePath: string | null
+  line: number | null
+  comments: AdoComment[]
+}
+
 export interface DiffLine {
   kind: 'add' | 'del' | 'ctx' | 'gap'
   text: string

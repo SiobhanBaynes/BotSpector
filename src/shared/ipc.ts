@@ -36,6 +36,8 @@ export const IPC = {
   prExplainDescription: 'pr:explainDescription',
   prExplainFileChange: 'pr:explainFileChange',
   prRefreshComments: 'pr:refreshComments',
+  prGetAdoComments: 'pr:getAdoComments',
+  prExplainAdoComment: 'pr:explainAdoComment',
   prGetChangedFiles: 'pr:getChangedFiles',
   prGetFileDiff: 'pr:getFileDiff',
   // main -> renderer progress event

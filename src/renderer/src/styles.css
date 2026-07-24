@@ -873,6 +873,12 @@ a {
   font-size: 13px;
   color: var(--text);
 }
+.rh-commit {
+  color: var(--muted);
+}
+.rh-commit.stale {
+  color: var(--medium);
+}
 .review-history-findings {
   display: flex;
   align-items: center;
@@ -1338,3 +1344,48 @@ a {
   max-width: 560px;
   margin-top: 24px;
 }
+
+/* Azure DevOps comments tab */
+.ado-comments-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ado-thread {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 12px 14px;
+}
+.ado-thread-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ado-thread-head .spacer {
+  flex: 1;
+}
+.ado-thread-loc {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ado-thread-comments {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ado-comment {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+.ado-comment-author {
+  color: var(--text);
+  font-weight: 600;
+}
+.ado-comment-body {
+  margin-top: 2px;
+}
+

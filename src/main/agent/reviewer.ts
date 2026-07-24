@@ -650,6 +650,41 @@ export async function explainFileChange(
   return (result.content ?? '').trim()
 }
 
+/**
+ * Explain an Azure DevOps comment thread (often written by a human reviewer) to
+ * the PR author: what's being asked, why it matters, and how to address it.
+ */
+export async function explainAdoComment(
+  input: { filePath: string | null; line: number | null; commentText: string; diffText?: string },
+  model: string
+): Promise<string> {
+  const loc = input.filePath
+    ? `\`${input.filePath}${input.line ? `:${input.line}` : ''}\``
+    : 'this pull request'
+  const diffBlock = input.diffText
+    ? `\n\nFor context, here is the relevant change:\n\`\`\`diff\n${input.diffText}\n\`\`\``
+    : ''
+  const result = await complete({
+    model,
+    temperature: 0.2,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You explain a pull-request review comment (usually written by a human reviewer) to ' +
+          'the PR author in plain language. Say what the reviewer is asking or pointing out, ' +
+          'why it matters, and concretely how to address it. Be concise (a short paragraph or a ' +
+          'few bullet points). Avoid jargon; briefly define any term you must use.'
+      },
+      {
+        role: 'user',
+        content: `Explain this review comment on ${loc}:\n\n"""\n${input.commentText}\n"""${diffBlock}`
+      }
+    ]
+  })
+  return (result.content ?? '').trim()
+}
+
 export async function draftComment(finding: Finding, model: string): Promise<string> {
   const result = await complete({
     model,

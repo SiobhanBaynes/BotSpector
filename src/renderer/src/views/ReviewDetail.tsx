@@ -16,6 +16,7 @@ import { FINDING_BUCKETS } from '../../../shared/types'
 import { FindingCard } from '../components/FindingCard'
 import { FilesTab, type FileRequest } from './FilesTab'
 import { ChatTab } from './ChatTab'
+import { AdoCommentsTab } from './AdoCommentsTab'
 
 interface Props {
   prId: number
@@ -24,7 +25,7 @@ interface Props {
 }
 
 type StatusFilter = 'all' | FindingStatus
-type Tab = 'review' | 'files' | 'chat'
+type Tab = 'review' | 'files' | 'comments' | 'chat'
 
 export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
@@ -403,6 +404,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
           Files
         </button>
         <button
+          className={tab === 'comments' ? 'tab active' : 'tab'}
+          onClick={() => setTab('comments')}
+        >
+          Comments
+        </button>
+        <button
           className={tab === 'chat' ? 'tab active' : 'tab'}
           onClick={() => setTab('chat')}
         >
@@ -422,6 +429,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
       <div style={{ display: tab === 'files' ? 'block' : 'none' }}>
         <FilesTab prId={prId} model={selectedModel} request={fileRequest} onChatAbout={chatAboutChange} />
       </div>
+
+      {tab === 'comments' && <AdoCommentsTab prId={prId} model={selectedModel} />}
 
       {/* Chat tab stays mounted so its conversation survives tab switches. */}
       <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
@@ -458,7 +467,9 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             )}
           </div>
 
-          {reviewHistory.length > 0 && <ReviewHistory history={reviewHistory} />}
+          {reviewHistory.length > 0 && (
+            <ReviewHistory history={reviewHistory} headCommit={pr?.headCommit ?? ''} />
+          )}
 
           <div className="filter-bar">
             <FilterChip label="All" count={total} active={filter === 'all'} onClick={() => setFilter('all')} />
@@ -517,43 +528,68 @@ function FilterChip({
 
 // A history of every model that has reviewed this PR, showing which findings it
 // raised itself and which existing findings it agreed with (+1'd).
-function ReviewHistory({ history }: { history: ReviewSummary[] }): JSX.Element {
+function ReviewHistory({
+  history,
+  headCommit
+}: {
+  history: ReviewSummary[]
+  headCommit: string
+}): JSX.Element {
   return (
     <details className="review-history">
       <summary>
         Review history <span className="count">{history.length}</span>
       </summary>
       <div className="review-history-body">
-        {history.map((r) => (
-          <div key={r.id} className="review-history-row">
-            <div className="review-history-head">
-              <span className="rh-model mono">{r.model}</span>
-              <span className="muted small">{new Date(r.createdAt).toLocaleString()}</span>
-            </div>
-            <div className="review-history-findings small">
-              <span className="rh-label">Raised:</span>
-              {r.createdFindings.length > 0 ? (
-                r.createdFindings.map((id) => (
-                  <span key={id} className="rh-chip created mono">
-                    {id}
+        {history.map((r) => {
+          const commit = r.reviewedCommit ?? ''
+          const onOldCommit = !!commit && !!headCommit && commit !== headCommit
+          return (
+            <div key={r.id} className="review-history-row">
+              <div className="review-history-head">
+                <span className="rh-model mono">{r.model}</span>
+                <span className="muted small">{new Date(r.createdAt).toLocaleString()}</span>
+                {commit ? (
+                  <span
+                    className={`rh-commit mono small ${onOldCommit ? 'stale' : ''}`}
+                    title={
+                      onOldCommit
+                        ? `Reviewed on ${commit} — the PR has since moved to ${headCommit}`
+                        : `Reviewed on ${commit} (current head)`
+                    }
+                  >
+                    @{commit.slice(0, 8)}
+                    {onOldCommit ? ' · previous commit' : ''}
                   </span>
-                ))
-              ) : (
-                <span className="muted">none</span>
-              )}
-              <span className="rh-label">+1'd:</span>
-              {r.contributedFindings.length > 0 ? (
-                r.contributedFindings.map((id) => (
-                  <span key={id} className="rh-chip plusone mono">
-                    {id}
-                  </span>
-                ))
-              ) : (
-                <span className="muted">none</span>
-              )}
+                ) : (
+                  <span className="muted small">commit n/a</span>
+                )}
+              </div>
+              <div className="review-history-findings small">
+                <span className="rh-label">Raised:</span>
+                {r.createdFindings.length > 0 ? (
+                  r.createdFindings.map((id) => (
+                    <span key={id} className="rh-chip created mono">
+                      {id}
+                    </span>
+                  ))
+                ) : (
+                  <span className="muted">none</span>
+                )}
+                <span className="rh-label">+1&apos;d:</span>
+                {r.contributedFindings.length > 0 ? (
+                  r.contributedFindings.map((id) => (
+                    <span key={id} className="rh-chip plusone mono">
+                      {id}
+                    </span>
+                  ))
+                ) : (
+                  <span className="muted">none</span>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </details>
   )
