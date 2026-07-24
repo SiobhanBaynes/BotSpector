@@ -460,6 +460,72 @@ export async function chatAboutPullRequest(
   return finalContent.trim()
 }
 
+const CHAT_FINDING_SYSTEM_PROMPT = `You convert a code-review discussion into a single structured review finding.
+Given an assistant message from a pull-request chat (and the PR context), extract
+the one concrete issue it describes into a finding.
+- Choose exactly one bucket: "Blocking", "High", "Medium", "Low", or "Nit".
+- Write a short, actionable title and a concise, plain-language description that
+  includes the suggested fix.
+- Set "file" to the most relevant changed file path (or null) and "line" to the
+  most relevant line number (or null).
+Respond with ONLY a JSON object of this exact shape (no prose, no markdown fences):
+{"bucket":"High","title":"...","description":"...","file":"path or null","line":123}`
+
+/**
+ * Turn an assistant chat message into a single structured finding. Uses the PR
+ * context (changed files, etc.) so the model can attribute a file/line, and
+ * returns a NewFinding ready to persist.
+ */
+export async function extractFindingFromChat(
+  input: { adoPrId: number; assistantMessage: string; history: ChatMessage[] },
+  model: string
+): Promise<NewFinding> {
+  const { adoPrId, assistantMessage, history } = input
+  const context = await getPullRequestContext(adoPrId)
+
+  const recent = history
+    .slice(-6)
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .join('\n\n')
+
+  const messages: AgentMessage[] = [
+    { role: 'system', content: CHAT_FINDING_SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content:
+        `Pull request #${adoPrId} context:\n\n` +
+        `${context.summary || '(no details available)'}\n\n` +
+        `Recent conversation:\n${recent}\n\n` +
+        `Turn the following assistant message into one finding:\n\n${assistantMessage}`
+    }
+  ]
+
+  const result = await complete({ model, messages })
+  let raw = (result.content ?? '').trim()
+  // Strip markdown fences if the model added them despite instructions.
+  raw = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // Fall back to the first {...} block if there's stray prose around it.
+    const match = raw.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('Could not turn that message into a finding — no JSON returned.')
+    parsed = JSON.parse(match[0])
+  }
+
+  const finding = findingSchema.parse(parsed)
+  return {
+    publicId: '',
+    bucket: normalizeBucket(finding.bucket),
+    title: finding.title,
+    description: finding.description,
+    filePath: finding.file ?? null,
+    line: finding.line ?? null
+  }
+}
+
 export async function assessFindingResolution(
   input: {
     finding: Finding

@@ -10,13 +10,29 @@ interface Props {
   pinnedChange?: PinnedChange | null
   /** Clear the pinned change (after sending or when the user removes it). */
   onClearPinnedChange?: () => void
+  /** Called after a finding is created from a chat message, so the review reloads. */
+  onFindingCreated?: () => void
 }
 
-export function ChatTab({ prId, model, pinnedChange, onClearPinnedChange }: Props): JSX.Element {
+// Per-message state for the "Create finding" action, keyed by message index.
+interface FindingState {
+  busy?: boolean
+  createdId?: string
+  error?: string
+}
+
+export function ChatTab({
+  prId,
+  model,
+  pinnedChange,
+  onClearPinnedChange,
+  onFindingCreated
+}: Props): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [findingState, setFindingState] = useState<Record<number, FindingState>>({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -31,6 +47,7 @@ export function ChatTab({ prId, model, pinnedChange, onClearPinnedChange }: Prop
     setMessages([])
     setInput('')
     setError(null)
+    setFindingState({})
     void window.api.getChatHistory(prId).then((res) => {
       if (!cancelled && res.ok) setMessages(res.data)
     })
@@ -75,8 +92,22 @@ export function ChatTab({ prId, model, pinnedChange, onClearPinnedChange }: Prop
   async function clear(): Promise<void> {
     if (busy) return
     const res = await window.api.clearChat(prId)
-    if (res.ok) setMessages([])
-    else setError(res.error)
+    if (res.ok) {
+      setMessages([])
+      setFindingState({})
+    } else setError(res.error)
+  }
+
+  async function createFinding(index: number, content: string): Promise<void> {
+    if (findingState[index]?.busy) return
+    setFindingState((s) => ({ ...s, [index]: { busy: true } }))
+    const res = await window.api.createFindingFromChat(prId, content, model)
+    if (res.ok) {
+      setFindingState((s) => ({ ...s, [index]: { createdId: res.data.publicId } }))
+      onFindingCreated?.()
+    } else {
+      setFindingState((s) => ({ ...s, [index]: { error: res.error } }))
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
@@ -121,6 +152,27 @@ export function ChatTab({ prId, model, pinnedChange, onClearPinnedChange }: Prop
                 m.content
               )}
             </div>
+            {m.role === 'assistant' && (
+              <div className="chat-msg-actions">
+                {findingState[i]?.createdId ? (
+                  <span className="chat-finding-created small">
+                    ✓ Added finding {findingState[i]?.createdId}
+                  </span>
+                ) : (
+                  <button
+                    className="btn subtle small-btn"
+                    onClick={() => void createFinding(i, m.content)}
+                    disabled={!!findingState[i]?.busy}
+                    title="Turn this reply into a review finding"
+                  >
+                    {findingState[i]?.busy ? 'Creating…' : '+ Create finding'}
+                  </button>
+                )}
+                {findingState[i]?.error && (
+                  <span className="chat-finding-error small">{findingState[i]?.error}</span>
+                )}
+              </div>
+            )}
           </div>
         ))}
         {busy && (

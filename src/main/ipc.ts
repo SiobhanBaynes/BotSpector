@@ -9,6 +9,7 @@ import type {
   CopilotModel,
   DeviceCodeInfo,
   FileDiff,
+  Finding,
   FindingStatus,
   IpcResult,
   PostedComment,
@@ -51,6 +52,7 @@ import {
   explainFinding,
   explainFileChange,
   explainPullRequest,
+  extractFindingFromChat,
   refineComment,
   reviewPullRequest
 } from './agent/reviewer'
@@ -761,6 +763,35 @@ export function registerIpcHandlers(): void {
           { role: 'assistant', content: reply }
         ])
         return ok(reply)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.findingCreateFromChat,
+    async (
+      _e,
+      prId: number,
+      assistantMessage: string,
+      modelArg?: string
+    ): Promise<IpcResult<Finding>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const text = assistantMessage.trim()
+        if (!text) throw new Error('Nothing to turn into a finding')
+        const model = resolveModel(modelArg)
+        const history = repo.listChatMessages(prId)
+        const draft = await extractFindingFromChat(
+          { adoPrId: pr.adoPrId, assistantMessage: text, history },
+          model
+        )
+        const finding = repo.addManualFinding(prId, model, draft)
+        // A new open finding may move the PR back into an in-progress state.
+        repo.recomputeReviewStatus(prId)
+        return ok(finding)
       } catch (e) {
         return fail(e)
       }

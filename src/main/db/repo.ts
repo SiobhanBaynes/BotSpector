@@ -446,6 +446,74 @@ export function createReview(
 }
 
 /**
+ * Insert a single ad-hoc finding raised outside the review agent (e.g. created
+ * from the chat window). It's attached to the given model's review row for this
+ * PR — reusing it if present, or creating one if the model hasn't reviewed yet —
+ * without disturbing any existing findings. Returns the created finding.
+ */
+export function addManualFinding(prId: number, model: string, finding: NewFinding): Finding {
+  const db = getDb()
+  const tx = db.transaction(() => {
+    let review = db
+      .prepare('SELECT id FROM reviews WHERE pr_id = ? AND model = ? ORDER BY created_at DESC LIMIT 1')
+      .get(prId, model) as { id: number } | undefined
+    if (!review) {
+      const head = (db.prepare('SELECT head_commit FROM pull_requests WHERE id = ?').get(prId) as
+        | { head_commit: string | null }
+        | undefined)?.head_commit ?? ''
+      const reviewId = Number(
+        db
+          .prepare(
+            `INSERT INTO reviews(pr_id, model, status, raw_response, reviewed_commit)
+             VALUES(?, ?, 'complete', '', ?)`
+          )
+          .run(prId, model, head).lastInsertRowid
+      )
+      review = { id: reviewId }
+    }
+
+    // Give the finding a PR-unique public id so it can't collide with any raised
+    // by the review agent or another model.
+    const usedRows = db
+      .prepare(
+        `SELECT f.public_id AS pid FROM findings f
+         JOIN reviews r ON r.id = f.review_id WHERE r.pr_id = ?`
+      )
+      .all(prId) as Array<{ pid: string }>
+    const used = new Set(usedRows.map((r) => r.pid))
+    let counter = 1
+    let publicId = `F-${String(counter).padStart(3, '0')}`
+    while (used.has(publicId)) {
+      counter++
+      publicId = `F-${String(counter).padStart(3, '0')}`
+    }
+
+    const insertedId = Number(
+      db
+        .prepare(
+          `INSERT INTO findings(review_id, public_id, bucket, title, description, file_path, line, model, contributors)
+           VALUES(@reviewId, @publicId, @bucket, @title, @description, @filePath, @line, @model, '[]')`
+        )
+        .run({
+          reviewId: review.id,
+          publicId,
+          model,
+          bucket: finding.bucket,
+          title: finding.title,
+          description: finding.description,
+          filePath: finding.filePath,
+          line: finding.line
+        }).lastInsertRowid
+    )
+    return insertedId
+  })
+  const insertedId = tx()
+  const created = getFinding(insertedId)
+  if (!created) throw new Error('Failed to create finding')
+  return created
+}
+
+/**
  * Record that other models contributed to existing findings (agreed with or
  * added to them). Adds the contributing model to each finding's contributor list
  * and appends its note to the description.

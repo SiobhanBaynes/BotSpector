@@ -425,7 +425,13 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
 
       {/* Chat tab stays mounted so its conversation survives tab switches. */}
       <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
-        <ChatTab prId={prId} model={selectedModel} pinnedChange={pinnedChange} onClearPinnedChange={() => setPinnedChange(null)} />
+        <ChatTab
+          prId={prId}
+          model={selectedModel}
+          pinnedChange={pinnedChange}
+          onClearPinnedChange={() => setPinnedChange(null)}
+          onFindingCreated={load}
+        />
       </div>
 
       {tab === 'review' && priorComments.length > 0 && (

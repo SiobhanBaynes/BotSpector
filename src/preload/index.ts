@@ -8,6 +8,7 @@ import type {
   CopilotModel,
   DeviceCodeInfo,
   FileDiff,
+  Finding,
   FindingStatus,
   IpcResult,
   PostedComment,
@@ -139,6 +140,12 @@ const api = {
     message: string,
     model?: string
   ): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.prChat, prId, message, model),
+  createFindingFromChat: (
+    prId: number,
+    assistantMessage: string,
+    model?: string
+  ): Promise<IpcResult<Finding>> =>
+    ipcRenderer.invoke(IPC.findingCreateFromChat, prId, assistantMessage, model),
   getChatHistory: (prId: number): Promise<IpcResult<ChatMessage[]>> =>
     ipcRenderer.invoke(IPC.prChatHistory, prId),
   clearChat: (prId: number): Promise<IpcResult<null>> =>

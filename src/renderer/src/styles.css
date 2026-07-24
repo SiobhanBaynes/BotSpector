@@ -690,6 +690,18 @@ a {
   background: rgba(56, 139, 253, 0.15);
   border-color: rgba(56, 139, 253, 0.4);
 }
+.chat-msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+}
+.chat-finding-created {
+  color: var(--ok);
+}
+.chat-finding-error {
+  color: var(--err);
+}
 /* Markdown content in assistant bubbles manages its own block spacing. */
 .chat-bubble .markdown {
   white-space: normal;
