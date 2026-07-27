@@ -123,6 +123,8 @@ const api = {
     ipcRenderer.invoke(IPC.prGetChangedFiles, prId),
   getFileDiff: (prId: number, path: string): Promise<IpcResult<FileDiff>> =>
     ipcRenderer.invoke(IPC.prGetFileDiff, prId, path),
+  fetchImage: (url: string): Promise<IpcResult<string | null>> =>
+    ipcRenderer.invoke(IPC.prFetchImage, url),
   reviewPullRequest: (prId: number, model?: string): Promise<IpcResult<Review>> =>
     ipcRenderer.invoke(IPC.prReview, prId, model),
   onReviewProgress: (cb: (p: ReviewProgress) => void): (() => void) => {

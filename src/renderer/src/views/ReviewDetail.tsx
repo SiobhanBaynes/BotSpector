@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type {
   CopilotModel,
   FindingStatus,
@@ -14,6 +12,7 @@ import type {
 } from '../../../shared/types'
 import { FINDING_BUCKETS } from '../../../shared/types'
 import { FindingCard } from '../components/FindingCard'
+import { Markdown } from '../components/Markdown'
 import { FilesTab, type FileRequest } from './FilesTab'
 import { ChatTab } from './ChatTab'
 import { AdoCommentsTab } from './AdoCommentsTab'
@@ -372,7 +371,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             <div className="pr-description">
               {pr.description.trim() ? (
                 <div className="markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{pr.description}</ReactMarkdown>
+                  <Markdown>{pr.description}</Markdown>
                 </div>
               ) : (
                 <span className="muted">No description.</span>
@@ -382,7 +381,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
               <div className="explanation">
                 <strong>In plain language</strong>
                 <div className="markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{explanation}</ReactMarkdown>
+                  <Markdown>{explanation}</Markdown>
                 </div>
               </div>
             )}

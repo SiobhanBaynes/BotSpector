@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type { ChatMessage, PinnedChange } from '../../../shared/types'
+import { Markdown } from '../components/Markdown'
 
 interface Props {
   prId: number
@@ -146,7 +145,7 @@ export function ChatTab({
             <div className="chat-bubble">
               {m.role === 'assistant' ? (
                 <div className="markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                  <Markdown>{m.content}</Markdown>
                 </div>
               ) : (
                 m.content

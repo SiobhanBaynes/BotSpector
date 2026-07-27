@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type { ChangedFile, FileDiff } from '../../../shared/types'
 import { DiffView } from '../components/DiffView'
+import { Markdown } from '../components/Markdown'
 
 export interface FileRequest {
   path: string
@@ -173,7 +172,7 @@ export function FilesTab({ prId, model, request, onChatAbout }: Props): JSX.Elem
                   <div className="explanation">
                     <strong>In plain language</strong>
                     <div className="markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{explanations[f.path]}</ReactMarkdown>
+                      <Markdown>{explanations[f.path]}</Markdown>
                     </div>
                   </div>
                 )}

@@ -811,6 +811,13 @@ a {
   border-left: 3px solid var(--border);
   color: var(--muted);
 }
+.markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  margin: 6px 0;
+}
 .markdown table {
   border-collapse: collapse;
   margin: 8px 0;

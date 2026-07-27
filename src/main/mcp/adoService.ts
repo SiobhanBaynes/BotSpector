@@ -652,6 +652,69 @@ export async function fetchFileContent(
   return text
 }
 
+/** Best-effort MIME type for an image based on its file extension. */
+function imageMimeFromPath(pathname: string): string {
+  const ext = pathname.toLowerCase().split('.').pop() ?? ''
+  switch (ext) {
+    case 'png':
+      return 'image/png'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'gif':
+      return 'image/gif'
+    case 'webp':
+      return 'image/webp'
+    case 'svg':
+      return 'image/svg+xml'
+    case 'bmp':
+      return 'image/bmp'
+    default:
+      return ''
+  }
+}
+
+/**
+ * Fetch an image embedded in a PR description (an Azure DevOps attachment) using
+ * the PAT and return it as a base64 data URL the renderer can display directly.
+ * Only Azure DevOps hosts are fetched with credentials so the PAT is never sent
+ * to an arbitrary URL that might appear in a description.
+ */
+export async function fetchImageAsDataUrl(rawUrl: string): Promise<string | null> {
+  const pat = secrets.getAdoPat()
+  if (!pat) return null
+
+  let url: URL
+  try {
+    // Relative attachment paths resolve against the Azure DevOps host.
+    url = new URL(rawUrl, 'https://dev.azure.com')
+  } catch {
+    return null
+  }
+
+  const host = url.hostname.toLowerCase()
+  const isAdoHost = host === 'dev.azure.com' || host.endsWith('.visualstudio.com')
+  if (url.protocol !== 'https:' || !isAdoHost) return null
+
+  // REST attachment endpoints expect an api-version; add one if it's missing.
+  if (url.pathname.includes('/_apis/') && !url.searchParams.has('api-version')) {
+    url.searchParams.set('api-version', '7.1')
+  }
+
+  const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Basic ${auth}`, Accept: 'application/octet-stream, image/*' }
+  })
+  if (!res.ok) throw new Error(`Could not fetch image (${res.status})`)
+
+  const headerType = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+  const mime = headerType.startsWith('image/')
+    ? headerType
+    : imageMimeFromPath(url.pathname) || 'application/octet-stream'
+  const buf = Buffer.from(await res.arrayBuffer())
+  return `data:${mime};base64,${buf.toString('base64')}`
+}
+
 /**
  * Create a comment thread on the pull request in Azure DevOps. If a file path
  * (and optional line) is given, the comment is attached to that file; otherwise

@@ -43,6 +43,7 @@ import {
   fetchCurrentUserDisplayName,
   fetchChangedFiles,
   fetchFileContent,
+  fetchImageAsDataUrl,
   fetchPullRequestComments,
   replyToPullRequestThread,
   postPullRequestComment
@@ -687,6 +688,18 @@ export function registerIpcHandlers(): void {
           : ''
 
         return ok(buildFileDiff(path, before, after))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.prFetchImage,
+    async (_e, url: string): Promise<IpcResult<string | null>> => {
+      try {
+        if (!url || typeof url !== 'string') return ok(null)
+        return ok(await fetchImageAsDataUrl(url))
       } catch (e) {
         return fail(e)
       }

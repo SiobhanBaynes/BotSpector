@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type { AdoCommentThread, CodeSnippet } from '../../../shared/types'
+import { Markdown } from '../components/Markdown'
 
 interface Props {
   prId: number
@@ -165,7 +164,7 @@ export function AdoCommentsTab({ prId, model, onOpenInFiles }: Props): JSX.Eleme
                     {c.date && <span> · {new Date(c.date).toLocaleString()}</span>}
                   </div>
                   <div className="ado-comment-body markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{c.content}</ReactMarkdown>
+                    <Markdown>{c.content}</Markdown>
                   </div>
                 </div>
               ))}
@@ -200,7 +199,7 @@ export function AdoCommentsTab({ prId, model, onOpenInFiles }: Props): JSX.Eleme
               <div className="explanation">
                 <strong>In plain language</strong>
                 <div className="markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{explanations[t.id]}</ReactMarkdown>
+                  <Markdown>{explanations[t.id]}</Markdown>
                 </div>
               </div>
             )}

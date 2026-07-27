@@ -42,6 +42,7 @@ export const IPC = {
   prReplyToComment: 'pr:replyToComment',
   prGetChangedFiles: 'pr:getChangedFiles',
   prGetFileDiff: 'pr:getFileDiff',
+  prFetchImage: 'pr:fetchImage',
   // main -> renderer progress event
   prReviewProgress: 'pr:reviewProgress',
   // main -> renderer event fired when a review finishes (or errors)
