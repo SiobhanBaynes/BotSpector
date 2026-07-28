@@ -7,6 +7,7 @@ interface Props {
   model: string
   onChanged: () => Promise<void> | void
   onOpenInFiles?: (path: string, line: number | null) => void
+  onChatAbout?: (finding: Finding) => void
 }
 
 const REFINEMENTS: Array<{ key: string; label: string; instruction: string }> = [
@@ -70,7 +71,7 @@ const THREAD_STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'byDesign', label: 'By design' }
 ]
 
-export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props): JSX.Element {
+export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAbout }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -394,6 +395,15 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles }: Props)
                 onClick={() => onOpenInFiles(finding.filePath as string, finding.line)}
               >
                 Show in Files
+              </button>
+            )}
+            {onChatAbout && (
+              <button
+                className="btn"
+                onClick={() => onChatAbout(finding)}
+                title="Ask the assistant about this finding"
+              >
+                💬 Chat about this finding
               </button>
             )}
             <button className="btn" onClick={draft} disabled={busy !== null || posted}>

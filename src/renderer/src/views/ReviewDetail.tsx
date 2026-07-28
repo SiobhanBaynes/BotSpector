@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
   CopilotModel,
+  Finding,
   FindingStatus,
   PostedComment,
   PrAdoDetails,
@@ -50,7 +51,20 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   }, [])
 
   const chatAboutChange = useCallback((path: string) => {
-    setPinnedChange({ path, nonce: Date.now() })
+    setPinnedChange({ kind: 'change', path, nonce: Date.now() })
+    setTab('chat')
+  }, [])
+
+  const chatAboutFinding = useCallback((finding: Finding) => {
+    setPinnedChange({
+      kind: 'finding',
+      findingId: finding.id,
+      publicId: finding.publicId,
+      title: finding.title,
+      filePath: finding.filePath,
+      line: finding.line,
+      nonce: Date.now()
+    })
     setTab('chat')
   }, [])
 
@@ -493,6 +507,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
                     model={selectedModel}
                     onChanged={load}
                     onOpenInFiles={openInFiles}
+                    onChatAbout={chatAboutFinding}
                   />
                 ))}
               </section>

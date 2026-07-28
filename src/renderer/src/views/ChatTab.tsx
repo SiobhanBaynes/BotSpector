@@ -63,11 +63,9 @@ export function ChatTab({
   async function send(): Promise<void> {
     const text = input.trim()
     if ((!text && !pinnedChange) || busy) return
-    // When a change is pinned, prefix the message with a reference to the file
-    // so the assistant knows which change we're asking about.
-    const content = pinnedChange
-      ? `Regarding the change in \`${pinnedChange.path}\`:\n\n${text}`.trim()
-      : text
+    // When something is pinned, prefix the message with a reference so the
+    // assistant knows which change or finding we're asking about.
+    const content = pinnedChange ? `${pinPrefix(pinnedChange)}\n\n${text}`.trim() : text
     // Optimistically show the user's message; the server persists on success.
     setMessages((m) => [...m, { role: 'user', content }])
     setInput('')
@@ -189,11 +187,31 @@ export function ChatTab({
 
       {pinnedChange && (
         <div className="chat-pinned">
-          <span className="chat-pinned-label">📌 Change:</span>
-          <span className="chat-pinned-path mono">{pinnedChange.path}</span>
+          {pinnedChange.kind === 'change' ? (
+            <>
+              <span className="chat-pinned-label">📌 Change:</span>
+              <span className="chat-pinned-path mono">{pinnedChange.path}</span>
+            </>
+          ) : (
+            <>
+              <span className="chat-pinned-label">📌 Finding:</span>
+              <span className="chat-pinned-path">
+                <span className="mono">{pinnedChange.publicId}</span> — {pinnedChange.title}
+                {pinnedChange.filePath && (
+                  <span className="muted small">
+                    {' · '}
+                    <span className="mono">
+                      {pinnedChange.filePath}
+                      {pinnedChange.line ? `:${pinnedChange.line}` : ''}
+                    </span>
+                  </span>
+                )}
+              </span>
+            </>
+          )}
           <button
             className="chat-pinned-remove"
-            title="Remove pinned change"
+            title="Remove pinned context"
             onClick={() => onClearPinnedChange?.()}
           >
             ×
@@ -222,4 +240,19 @@ export function ChatTab({
       </div>
     </div>
   )
+}
+
+// Prefix a chat message with a reference to the pinned context, so the
+// assistant knows which change or finding the user is asking about.
+function pinPrefix(pin: PinnedChange): string {
+  if (pin.kind === 'change') {
+    return `Regarding the change in \`${pin.path}\`:`
+  }
+  const loc =
+    pin.filePath && pin.line
+      ? ` (\`${pin.filePath}:${pin.line}\`)`
+      : pin.filePath
+        ? ` (\`${pin.filePath}\`)`
+        : ''
+  return `Regarding finding ${pin.publicId} — ${pin.title}${loc}:`
 }

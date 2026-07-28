@@ -193,10 +193,25 @@ export interface DiffLine {
 }
 
 // A file change pinned from the Files tab to be attached to the next chat message.
-export interface PinnedChange {
+export interface PinnedFileChange {
+  kind: 'change'
   path: string
   nonce: number
 }
+
+// A finding pinned from the Review tab to be attached to the next chat message.
+export interface PinnedFinding {
+  kind: 'finding'
+  findingId: number
+  publicId: string
+  title: string
+  filePath: string | null
+  line: number | null
+  nonce: number
+}
+
+// Whatever the user has pinned to the chat composer next. Only one at a time.
+export type PinnedChange = PinnedFileChange | PinnedFinding
 
 export interface CodeSnippet {
   filePath: string
