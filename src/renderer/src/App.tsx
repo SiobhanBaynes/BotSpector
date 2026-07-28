@@ -3,6 +3,7 @@ import type { Settings } from '../../shared/types'
 import { PrList } from './views/PrList'
 import { ReviewDetail } from './views/ReviewDetail'
 import { SettingsView } from './views/Settings'
+import { useTheme } from './theme'
 
 type Tab = 'prs' | 'settings'
 
@@ -10,6 +11,7 @@ export function App(): JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [tab, setTab] = useState<Tab>('prs')
   const [selectedPrId, setSelectedPrId] = useState<number | null>(null)
+  const { theme, setTheme } = useTheme()
 
   const refreshSettings = useCallback(async () => {
     const res = await window.api.getSettings()
@@ -55,7 +57,12 @@ export function App(): JSX.Element {
 
       <main className="content">
         {tab === 'settings' && (
-          <SettingsView settings={settings} onChange={refreshSettings} />
+          <SettingsView
+            settings={settings}
+            onChange={refreshSettings}
+            theme={theme}
+            onThemeChange={setTheme}
+          />
         )}
         {tab === 'prs' && !configured && (
           <div className="empty">

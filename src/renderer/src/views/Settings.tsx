@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { CopilotModel, DeviceCodeInfo, Settings } from '../../../shared/types'
+import type { ThemePref } from '../theme'
 
 interface Props {
   settings: Settings | null
   onChange: () => Promise<void> | void
+  theme: ThemePref
+  onThemeChange: (pref: ThemePref) => void
 }
 
-export function SettingsView({ settings, onChange }: Props): JSX.Element {
+export function SettingsView({ settings, onChange, theme, onThemeChange }: Props): JSX.Element {
   const [adoOrg, setAdoOrg] = useState('')
   const [adoProject, setAdoProject] = useState('')
   const [adoRepo, setAdoRepo] = useState('')
@@ -163,6 +166,27 @@ export function SettingsView({ settings, onChange }: Props): JSX.Element {
       <h1>Settings</h1>
       {message && <div className="banner ok">{message}</div>}
       {error && <div className="banner err">{error}</div>}
+
+      <section className="card">
+        <h2>Appearance</h2>
+        <p className="muted">Choose a light or dark theme, or follow your system setting.</p>
+        <div className="row theme-choices">
+          {(['system', 'light', 'dark'] as ThemePref[]).map((opt) => (
+            <label key={opt} className={theme === opt ? 'theme-choice active' : 'theme-choice'}>
+              <input
+                type="radio"
+                name="theme"
+                value={opt}
+                checked={theme === opt}
+                onChange={() => onThemeChange(opt)}
+              />
+              <span className="theme-choice-label">
+                {opt === 'system' ? 'System' : opt === 'light' ? 'Light' : 'Dark'}
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
 
       <section className="card">
         <h2>GitHub Copilot</h2>
