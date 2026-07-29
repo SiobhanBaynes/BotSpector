@@ -539,6 +539,7 @@ export async function assessFindingResolution(
   const conversation = replies.length
     ? replies.map((r) => `${r.author}: ${r.text}`).join('\n\n')
     : '(no replies)'
+  const hasCode = codeText.trim().length > 0
   const result = await complete({
     model,
     temperature: 0.1,
@@ -546,12 +547,22 @@ export async function assessFindingResolution(
       {
         role: 'system',
         content:
-          'You judge whether a code-review finding has been resolved. You are given the original ' +
-          'finding, the review comment we posted, the author\'s replies, and the current version of ' +
-          'the relevant code. Decide whether the finding is now resolved. Respond ONLY with a JSON ' +
-          'object of the form {"verdict": "resolved" | "unresolved" | "unclear", "explanation": "<one short paragraph>"}. ' +
-          'Use "resolved" only when the current code and/or the reply clearly address the finding. ' +
-          'Use "unclear" if the provided information is insufficient to decide.'
+          'You judge whether a code-review finding has been resolved. The current code is ' +
+          'the primary evidence: base your verdict on what the code actually shows, not on ' +
+          'what the author claims. Author replies are only weak hints — they cannot make a ' +
+          'finding "resolved" on their own if the code does not show the fix.\n\n' +
+          'Decision rules:\n' +
+          '- "resolved": the current code clearly addresses the finding. Cite the specific ' +
+          'change (added/removed/modified lines) that fixes it in your explanation.\n' +
+          '- "unresolved": the current code still exhibits the problem, OR the reply promises ' +
+          'a fix that is not present in the code.\n' +
+          '- "unclear": you cannot see the relevant code (unavailable), or the code touches ' +
+          'the area but does not obviously fix or fail to fix the finding.\n\n' +
+          'Do NOT mark a finding "resolved" purely because the author said so. If the code is ' +
+          'unavailable, prefer "unclear" over trusting the reply.\n\n' +
+          'Respond ONLY with a JSON object of the form ' +
+          '{"verdict": "resolved" | "unresolved" | "unclear", "explanation": "<one short paragraph>"}. ' +
+          'The explanation must lead with what the code shows.'
       },
       {
         role: 'user',
@@ -559,9 +570,10 @@ export async function assessFindingResolution(
           `Finding [${finding.bucket}] ${finding.title}\n` +
           `${finding.description}\n` +
           `File: ${finding.filePath ?? 'n/a'}${finding.line ? `:${finding.line}` : ''}\n\n` +
-          `Review comment we posted:\n${commentText}\n\n` +
-          `Author replies:\n${conversation}\n\n` +
-          `Current code around the finding:\n${codeText || '(unavailable)'}`
+          `Current code around the finding (primary evidence):\n` +
+          `${hasCode ? codeText : '(unavailable — prefer "unclear" unless the reply itself contradicts a fix)'}\n\n` +
+          `Review comment we posted (context only):\n${commentText}\n\n` +
+          `Author replies (hint only, do not rely on):\n${conversation}`
       }
     ]
   })
