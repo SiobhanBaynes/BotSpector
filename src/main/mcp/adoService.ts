@@ -816,6 +816,27 @@ export async function replyToPullRequestThread(
  * often omits the description, so we retrieve it on demand.
  */
 export async function fetchPullRequestDescription(adoPrId: number): Promise<string | null> {
+  const summary = await fetchPullRequestSummary(adoPrId)
+  return summary?.description ?? null
+}
+
+/**
+ * Fetch the current mutable PR fields (title, description, branches, status,
+ * draft flag) via the "get pull request" tool. Used by the Refresh button so
+ * changes made on Azure DevOps flow back into the app.
+ */
+export interface PullRequestSummary {
+  title: string
+  description: string
+  sourceBranch: string
+  targetBranch: string
+  status: string
+  isDraft: boolean
+}
+
+export async function fetchPullRequestSummary(
+  adoPrId: number
+): Promise<PullRequestSummary | null> {
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
 
@@ -844,8 +865,16 @@ export async function fetchPullRequestDescription(adoPrId: number): Promise<stri
     if (Array.isArray(p.value)) obj = p.value[0] as AnyRecord
     else obj = p
   }
-  const desc = obj?.description
-  return typeof desc === 'string' ? desc : null
+  if (!obj) return null
+
+  return {
+    title: typeof obj.title === 'string' ? obj.title : '',
+    description: typeof obj.description === 'string' ? obj.description : '',
+    sourceBranch: shortBranch(obj.sourceRefName),
+    targetBranch: shortBranch(obj.targetRefName),
+    status: typeof obj.status === 'string' ? obj.status : 'active',
+    isDraft: !!obj.isDraft
+  }
 }
 
 /**

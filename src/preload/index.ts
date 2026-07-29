@@ -73,6 +73,8 @@ const api = {
     ipcRenderer.invoke(IPC.prListCached),
   getPullRequest: (prId: number): Promise<IpcResult<PullRequest | null>> =>
     ipcRenderer.invoke(IPC.prGet, prId),
+  refreshPullRequest: (prId: number): Promise<IpcResult<PullRequest | null>> =>
+    ipcRenderer.invoke(IPC.prRefresh, prId),
   getReview: (prId: number): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.prGetReview, prId),
   setReviewStatus: (prId: number, status: ReviewStatus): Promise<IpcResult<PullRequest | null>> =>

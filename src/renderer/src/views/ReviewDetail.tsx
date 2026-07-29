@@ -36,6 +36,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   const [models, setModels] = useState<CopilotModel[]>([])
   const [selectedModel, setSelectedModel] = useState<string>(defaultModel)
   const [reviewing, setReviewing] = useState(false)
+  const [refreshingPr, setRefreshingPr] = useState(false)
   const [progress, setProgress] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [explanation, setExplanation] = useState<string | null>(null)
@@ -150,6 +151,24 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     else setError(res.error)
   }
 
+  // Force-reload the PR summary and live Azure DevOps details. Useful when the
+  // author has edited the title/description or updated votes and the app is
+  // still showing the cached version.
+  async function refreshPr(): Promise<void> {
+    if (refreshingPr) return
+    setRefreshingPr(true)
+    setError(null)
+    const [prRes, adoRes] = await Promise.all([
+      window.api.refreshPullRequest(prId),
+      window.api.getAdoDetails(prId)
+    ])
+    setRefreshingPr(false)
+    if (prRes.ok) {
+      if (prRes.data) setPr(prRes.data)
+    } else setError(prRes.error)
+    if (adoRes.ok) setAdoDetails(adoRes.data)
+  }
+
   async function explainPr(): Promise<void> {
     setExplaining(true)
     setError(null)
@@ -238,6 +257,20 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
       <div className="review-header">
         <button className="btn" onClick={onBack}>
           ← Back
+        </button>
+        <button
+          className="btn"
+          onClick={() => void refreshPr()}
+          disabled={refreshingPr}
+          title="Reload this PR from Azure DevOps (title, description, votes, draft, head commit)"
+        >
+          {refreshingPr ? (
+            <>
+              <span className="spinner" /> Refreshing…
+            </>
+          ) : (
+            '↻ Refresh'
+          )}
         </button>
         <div className="review-status-control">
           <span className="muted small">Status</span>

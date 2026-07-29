@@ -338,6 +338,36 @@ export function updatePullRequestDescription(prId: number, description: string):
   getDb().prepare('UPDATE pull_requests SET description = ? WHERE id = ?').run(description, prId)
 }
 
+// Update the PR fields that the author can change in Azure DevOps after the
+// initial sync. Called by the Refresh button so the UI reflects the current PR.
+export function updatePullRequestSummary(
+  prId: number,
+  summary: {
+    title: string
+    description: string
+    sourceBranch: string
+    targetBranch: string
+    status: string
+    isDraft: boolean
+  }
+): void {
+  getDb()
+    .prepare(
+      `UPDATE pull_requests
+       SET title = ?, description = ?, source_branch = ?, target_branch = ?, status = ?, is_draft = ?
+       WHERE id = ?`
+    )
+    .run(
+      summary.title,
+      summary.description,
+      summary.sourceBranch,
+      summary.targetBranch,
+      summary.status,
+      summary.isDraft ? 1 : 0,
+      prId
+    )
+}
+
 export function updatePullRequestHeadCommit(prId: number, commit: string): void {
   getDb().prepare('UPDATE pull_requests SET head_commit = ? WHERE id = ?').run(commit, prId)
 }

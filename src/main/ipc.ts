@@ -29,6 +29,7 @@ import { listModels } from './copilot/client'
 import {
   listPullRequests,
   fetchPullRequestDescription,
+  fetchPullRequestSummary,
   fetchPullRequestHeadCommit,
   fetchPullRequestMergeCommits,
   fetchPullRequestDiffRange,
@@ -360,6 +361,55 @@ export function registerIpcHandlers(): void {
       return fail(e)
     }
   })
+
+  // Force-refresh a PR from Azure DevOps: title, description, branches, status,
+  // draft flag, head commit and cached list metadata. Wired to the Refresh
+  // button on the review detail page so edits made in Azure DevOps flow back.
+  ipcMain.handle(
+    IPC.prRefresh,
+    async (_e, prId: number): Promise<IpcResult<PullRequest | null>> => {
+      try {
+        const existing = repo.getPullRequest(prId)
+        if (!existing) return ok(null)
+
+        // Fetch the mutable PR fields, head commit and ADO metadata in parallel
+        // — each is optional and failures shouldn't block the others.
+        const [summaryRes, headRes, metaRes] = await Promise.allSettled([
+          fetchPullRequestSummary(existing.adoPrId),
+          fetchPullRequestHeadCommit(existing.adoPrId),
+          fetchPullRequestListMeta(existing.adoPrId)
+        ])
+
+        if (summaryRes.status === 'fulfilled' && summaryRes.value) {
+          repo.updatePullRequestSummary(prId, summaryRes.value)
+        } else if (summaryRes.status === 'rejected') {
+          logger.warn(`could not refresh summary for pr id ${prId}`, {
+            error: (summaryRes.reason as Error).message
+          })
+        }
+
+        if (headRes.status === 'fulfilled' && headRes.value) {
+          repo.updatePullRequestHeadCommit(prId, headRes.value)
+        } else if (headRes.status === 'rejected') {
+          logger.warn(`could not refresh head commit for pr id ${prId}`, {
+            error: (headRes.reason as Error).message
+          })
+        }
+
+        if (metaRes.status === 'fulfilled' && metaRes.value) {
+          repo.updatePrAdoMeta(prId, metaRes.value)
+        } else if (metaRes.status === 'rejected') {
+          logger.warn(`could not refresh ADO metadata for pr id ${prId}`, {
+            error: (metaRes.reason as Error).message
+          })
+        }
+
+        return ok(repo.getPullRequest(prId))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
 
   ipcMain.handle(IPC.prGetReview, (_e, prId: number): IpcResult<Review | null> => {
     try {
