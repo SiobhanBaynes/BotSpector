@@ -547,30 +547,38 @@ export async function assessFindingResolution(
       {
         role: 'system',
         content:
-          'You judge whether a code-review finding has been resolved. The current code is ' +
-          'the primary evidence: base your verdict on what the code actually shows, not on ' +
-          'what the author claims. Author replies are only weak hints — they cannot make a ' +
-          'finding "resolved" on their own if the code does not show the fix.\n\n' +
+          'You judge whether a code-review finding has been resolved. The diff of the ' +
+          'file (base → head) is the primary evidence: base your verdict on what the code ' +
+          'actually shows. Author replies are only weak hints — they cannot make a finding ' +
+          '"resolved" on their own if the code does not show the fix.\n\n' +
+          'Important:\n' +
+          '- The fix may appear anywhere in the diff, not necessarily on the line the ' +
+          'finding originally pointed to. Read the whole diff before deciding.\n' +
+          '- An equivalent fix (renamed helper, refactored guard, moved logic) still ' +
+          'counts as resolved.\n' +
+          '- Do NOT require a perfect literal match; ask whether the concern in the ' +
+          'finding no longer applies to the current code.\n\n' +
           'Decision rules:\n' +
-          '- "resolved": the current code clearly addresses the finding. Cite the specific ' +
-          'change (added/removed/modified lines) that fixes it in your explanation.\n' +
-          '- "unresolved": the current code still exhibits the problem, OR the reply promises ' +
-          'a fix that is not present in the code.\n' +
-          '- "unclear": you cannot see the relevant code (unavailable), or the code touches ' +
-          'the area but does not obviously fix or fail to fix the finding.\n\n' +
-          'Do NOT mark a finding "resolved" purely because the author said so. If the code is ' +
-          'unavailable, prefer "unclear" over trusting the reply.\n\n' +
+          '- "resolved": the current code addresses the finding (directly or via an ' +
+          'equivalent change). Briefly reference the change that fixes it.\n' +
+          '- "unresolved": the file is unchanged in the relevant area, or the code still ' +
+          'exhibits the problem, or the reply promises a fix that is not present.\n' +
+          '- "unclear": use ONLY when the diff is missing/empty, or the change is genuinely ' +
+          'ambiguous. Do not use "unclear" just because the fix is elsewhere in the file — ' +
+          'in that case, pick "resolved" or "unresolved" based on the diff.\n\n' +
+          'Do NOT mark a finding "resolved" purely because the author said so. If the code ' +
+          'contradicts the reply, trust the code.\n\n' +
           'Respond ONLY with a JSON object of the form ' +
           '{"verdict": "resolved" | "unresolved" | "unclear", "explanation": "<one short paragraph>"}. ' +
-          'The explanation must lead with what the code shows.'
+          'Lead the explanation with what the code shows.'
       },
       {
         role: 'user',
         content:
           `Finding [${finding.bucket}] ${finding.title}\n` +
           `${finding.description}\n` +
-          `File: ${finding.filePath ?? 'n/a'}${finding.line ? `:${finding.line}` : ''}\n\n` +
-          `Current code around the finding (primary evidence):\n` +
+          `File: ${finding.filePath ?? 'n/a'}${finding.line ? ` (originally line ${finding.line})` : ''}\n\n` +
+          `Full-file diff base → head (primary evidence):\n` +
           `${hasCode ? codeText : '(unavailable — prefer "unclear" unless the reply itself contradicts a fix)'}\n\n` +
           `Review comment we posted (context only):\n${commentText}\n\n` +
           `Author replies (hint only, do not rely on):\n${conversation}`

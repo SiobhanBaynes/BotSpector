@@ -868,6 +868,9 @@ export function registerIpcHandlers(): void {
 
         // Pull the CURRENT (head) version of the file so the AI can see whether
         // the latest commit addresses the finding — not the version we reviewed.
+        // Use the full-file diff (with gap markers) rather than a narrow window
+        // around finding.line, so the model can spot a fix even if it landed
+        // elsewhere in the file (a common cause of false "unclear" verdicts).
         let codeText = ''
         if (finding.filePath && pr) {
           const range = await fetchPullRequestDiffRange(pr.adoPrId).catch(() => null)
@@ -883,13 +886,30 @@ export function registerIpcHandlers(): void {
                 () => null
               )) ?? '')
             : ''
-          const snippet = buildDiffSnippet(finding.filePath, before, after, finding.line)
-          codeText = snippet.lines
-            .map(
-              (ln) =>
-                `${ln.kind === 'add' ? '+' : ln.kind === 'del' ? '-' : ' '}${ln.text}`
-            )
-            .join('\n')
+          if (before === '' && after === '') {
+            codeText = ''
+          } else {
+            const fileDiff = buildFileDiff(finding.filePath, before, after)
+            if (fileDiff.lines.length === 0) {
+              codeText = '(file unchanged in this PR)'
+            } else {
+              const text = fileDiff.lines
+                .map((ln) => {
+                  const sign =
+                    ln.kind === 'add' ? '+' : ln.kind === 'del' ? '-' : ln.kind === 'gap' ? ' ' : ' '
+                  return `${sign}${ln.text}`
+                })
+                .join('\n')
+              // Cap to keep the prompt sane on huge files. Truncation is
+              // preferable to a narrow window because it still keeps the added
+              // and removed lines interleaved with their surrounding context.
+              const MAX_CODE_CHARS = 12000
+              codeText =
+                text.length > MAX_CODE_CHARS
+                  ? text.slice(0, MAX_CODE_CHARS) + '\n… (diff truncated)'
+                  : text
+            }
+          }
         }
 
         const assessment = await assessFindingResolution(
