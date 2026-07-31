@@ -173,6 +173,12 @@ const api = {
     model?: string
   ): Promise<IpcResult<Finding>> =>
     ipcRenderer.invoke(IPC.findingCreateFromChat, prId, assistantMessage, model),
+  createFindingFromAdoComment: (
+    prId: number,
+    threadId: number,
+    model?: string
+  ): Promise<IpcResult<Finding>> =>
+    ipcRenderer.invoke(IPC.findingCreateFromAdoComment, prId, threadId, model),
   getChatHistory: (prId: number): Promise<IpcResult<ChatMessage[]>> =>
     ipcRenderer.invoke(IPC.prChatHistory, prId),
   clearChat: (prId: number): Promise<IpcResult<null>> =>

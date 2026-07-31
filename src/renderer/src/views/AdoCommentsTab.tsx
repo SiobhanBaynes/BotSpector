@@ -7,6 +7,8 @@ interface Props {
   model: string
   /** Open (and scroll to) a file/line in the Files tab. */
   onOpenInFiles?: (path: string, line: number | null) => void
+  /** Called after a finding is created from an ADO comment, so the review reloads. */
+  onFindingCreated?: () => void
 }
 
 // Map Azure DevOps thread status values to a friendly label.
@@ -47,7 +49,12 @@ function statusClass(status: string | null): string {
 
 /** Shows the Azure DevOps comment threads on a PR (including ones raised by
  *  other reviewers), each with Explain / View code / Show in Files / Reply. */
-export function AdoCommentsTab({ prId, model, onOpenInFiles }: Props): JSX.Element {
+export function AdoCommentsTab({
+  prId,
+  model,
+  onOpenInFiles,
+  onFindingCreated
+}: Props): JSX.Element {
   const [threads, setThreads] = useState<AdoCommentThread[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -56,6 +63,7 @@ export function AdoCommentsTab({ prId, model, onOpenInFiles }: Props): JSX.Eleme
   const [code, setCode] = useState<Record<number, CodeSnippet | null>>({})
   const [showCode, setShowCode] = useState<Record<number, boolean>>({})
   const [replyText, setReplyText] = useState<Record<number, string>>({})
+  const [createdFindingId, setCreatedFindingId] = useState<Record<number, string>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -124,6 +132,17 @@ export function AdoCommentsTab({ prId, model, onOpenInFiles }: Props): JSX.Eleme
     if (res.ok) {
       setThreads(res.data)
       setReplyText((r) => ({ ...r, [thread.id]: '' }))
+    } else setError(res.error)
+  }
+
+  async function createFinding(thread: AdoCommentThread): Promise<void> {
+    setThreadBusy(thread.id, 'finding')
+    setError(null)
+    const res = await window.api.createFindingFromAdoComment(prId, thread.id, model)
+    setThreadBusy(thread.id, null)
+    if (res.ok) {
+      setCreatedFindingId((m) => ({ ...m, [thread.id]: res.data.publicId }))
+      onFindingCreated?.()
     } else setError(res.error)
   }
 
@@ -225,6 +244,20 @@ export function AdoCommentsTab({ prId, model, onOpenInFiles }: Props): JSX.Eleme
                 {t.filePath && onOpenInFiles && (
                   <button className="btn" onClick={() => onOpenInFiles(t.filePath as string, t.line)}>
                     Show in Files
+                  </button>
+                )}
+                {createdFindingId[t.id] ? (
+                  <span className="chat-finding-created small">
+                    ✓ Added finding {createdFindingId[t.id]}
+                  </span>
+                ) : (
+                  <button
+                    className="btn"
+                    onClick={() => void createFinding(t)}
+                    disabled={tBusy !== null}
+                    title="Turn this reviewer's comment into a review finding you can track and address"
+                  >
+                    {tBusy === 'finding' ? 'Creating…' : '+ Create finding'}
                   </button>
                 )}
                 <span className="spacer" />

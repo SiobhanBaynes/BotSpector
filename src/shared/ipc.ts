@@ -60,6 +60,7 @@ export const IPC = {
   findingSetThreadStatus: 'finding:setThreadStatus',
   findingCheckResolved: 'finding:checkResolved',
   findingCreateFromChat: 'finding:createFromChat',
+  findingCreateFromAdoComment: 'finding:createFromAdoComment',
   prChat: 'pr:chat',
   prChatHistory: 'pr:chatHistory',
   prChatClear: 'pr:chatClear',

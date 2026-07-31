@@ -999,6 +999,54 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(
+    IPC.findingCreateFromAdoComment,
+    async (
+      _e,
+      prId: number,
+      threadId: number,
+      modelArg?: string
+    ): Promise<IpcResult<Finding>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const model = resolveModel(modelArg)
+
+        // Look up the thread live so we always work from the current text and
+        // status, not whatever the renderer had cached.
+        const threads = await fetchPullRequestComments(pr.adoPrId)
+        const thread = threads.find((t) => t.id === threadId)
+        if (!thread) throw new Error('Comment thread not found')
+        if (thread.comments.length === 0) throw new Error('Comment thread is empty')
+
+        const locLabel = thread.filePath
+          ? `${thread.filePath}${thread.line ? `:${thread.line}` : ''}`
+          : 'general PR comment'
+        const conversation = thread.comments
+          .map((c) => `${c.author}: ${c.content}`)
+          .join('\n\n')
+        const assistantMessage =
+          `A reviewer left this comment on ${locLabel}. Turn the concern it raises ` +
+          `into a review finding:\n\n${conversation}`
+
+        const draft = await extractFindingFromChat(
+          { adoPrId: pr.adoPrId, assistantMessage, history: [] },
+          model
+        )
+        // Prefer the thread's own anchor when the model didn't pick one — the
+        // reviewer already told us exactly which file/line the concern is about.
+        if (!draft.filePath && thread.filePath) draft.filePath = thread.filePath
+        if (draft.line == null && thread.line != null) draft.line = thread.line
+
+        const finding = repo.addManualFinding(prId, model, draft)
+        repo.recomputeReviewStatus(prId)
+        return ok(finding)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
   ipcMain.handle(IPC.prChatHistory, (_e, prId: number): IpcResult<ChatMessage[]> => {
     try {
       return ok(repo.listChatMessages(prId))
