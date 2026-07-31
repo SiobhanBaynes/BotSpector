@@ -48,19 +48,11 @@ this exact shape (no prose, no markdown fences):
       "file": "path/to/file or null",
       "line": 123
     }
-  ],
-  "additions": [
-    {
-      "id": "F-007",
-      "note": "what you'd add to this existing finding"
-    }
   ]
 }
-Put only genuinely NEW issues in "findings". If another agent already reported an
-issue (see "Existing findings" in the context), do NOT repeat it as a new finding.
-Instead, if you agree with it or have something to add, reference its existing id
-in "additions" with a short note. Omit "additions" (or use []) if you have nothing
-to add.`
+Report every real issue you find. Do your own independent review — don't hold
+back because you assume another agent may have already raised the same issue.
+Overlaps are fine; they are reconciled after your report.`
 
 function buildSystemPrompt(instructions?: string): string {
   const guidance = (instructions ?? '').trim() || DEFAULT_REVIEW_INSTRUCTIONS
@@ -76,14 +68,8 @@ const findingSchema = z.object({
   line: z.number().nullable().optional()
 })
 
-const additionSchema = z.object({
-  id: z.string(),
-  note: z.string().optional()
-})
-
 const reportSchema = z.object({
-  findings: z.array(findingSchema),
-  additions: z.array(additionSchema).optional()
+  findings: z.array(findingSchema)
 })
 
 function normalizeBucket(raw: string): (typeof FINDING_BUCKETS)[number] {
@@ -162,22 +148,6 @@ function buildPriorCommentsBlock(priorComments: PostedComment[]): string {
   )
 }
 
-// Build a context block listing findings other models already raised on this PR,
-// so a new agent avoids duplicating them and can contribute to them instead.
-function buildExistingFindingsBlock(existingFindings: Finding[]): string {
-  if (existingFindings.length === 0) return ''
-  const entries = existingFindings.map((f) => {
-    const loc = f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ''})` : ''
-    return `- ${f.publicId} [${f.bucket}] raised by ${f.model || 'a prior agent'}${loc}: ${f.title}\n    ${f.description}`
-  })
-  return (
-    `\n\nExisting findings already raised on this PR by other agents. Do NOT repeat any ` +
-    `of these as new findings. If you agree with one or have something to add, reference ` +
-    `its id in "additions" instead. Only report genuinely new issues in "findings".\n\n` +
-    entries.join('\n')
-  )
-}
-
 export async function reviewPullRequest(
   adoPrId: number,
   model: string,
@@ -190,6 +160,10 @@ export async function reviewPullRequest(
   const context = await getPullRequestContext(adoPrId)
   const tools = await mcpToolsAsDefinitions()
 
+  // The reviewer runs blind: it is deliberately NOT shown findings raised by
+  // other models. Otherwise it tends to defer to them ("+1 to F-003") and
+  // barely raises any of its own. We reconcile overlap with a separate merge
+  // pass after the review, below.
   const messages: AgentMessage[] = [
     { role: 'system', content: buildSystemPrompt(instructions) },
     {
@@ -197,8 +171,7 @@ export async function reviewPullRequest(
       content:
         `Review pull request #${adoPrId}. Here is the context already gathered.\n\n` +
         `${context.summary || '(no details fetched; use tools to gather them)'}` +
-        `${buildPriorCommentsBlock(priorComments)}` +
-        `${buildExistingFindingsBlock(existingFindings)}\n\n` +
+        `${buildPriorCommentsBlock(priorComments)}\n\n` +
         `Use the available Azure DevOps tools to inspect changed files as needed, then ` +
         `produce your JSON findings report.`
     }
@@ -285,14 +258,17 @@ export async function reviewPullRequest(
     if (report) finalContent = repaired
   }
   if (!report) throw new Error('The model did not return valid JSON findings.')
-  return { findings: report.findings, additions: report.additions, raw: finalContent }
+
+  // Reconcile this reviewer's findings against issues other models have already
+  // raised: overlaps become "+1" contributions on the existing finding; the rest
+  // stay as new findings from this model.
+  onProgress('Reconciling with other agents’ findings…')
+  const merged = await mergeAgainstExisting(report.findings, existingFindings, model, adoPrId)
+  return { findings: merged.findings, additions: merged.additions, raw: finalContent }
 }
 
 /** Parse the model's report, returning null (rather than throwing) on failure. */
-function tryParseReport(content: string): {
-  findings: NewFinding[]
-  additions: FindingContribution[]
-} | null {
+function tryParseReport(content: string): { findings: NewFinding[] } | null {
   const jsonText = extractJsonObject(content)
   let parsed: unknown
   try {
@@ -312,10 +288,131 @@ function tryParseReport(content: string): {
     line: typeof f.line === 'number' ? f.line : null
   }))
 
-  const additions = (report.data.additions ?? [])
-    .map((a) => ({ publicId: a.id.trim(), note: (a.note ?? '').trim() }))
-    .filter((a) => a.publicId)
+  return { findings }
+}
 
+// ---- merge / dedup step ----
+
+const MERGE_SYSTEM_PROMPT = `You reconcile code-review findings raised independently by two agents on the
+same pull request. Given a set of NEW candidate findings and a set of EXISTING
+findings already on the PR, decide, for each candidate, whether it describes
+essentially the SAME underlying issue as one of the existing findings.
+
+Two findings match when they concern the same underlying problem or root cause,
+even if worded differently, at a slightly different line, with a different
+severity, or with a different suggested fix.
+
+Two findings do NOT match when they are different issues, even if they touch
+the same file or feature. Be conservative: when in doubt, prefer "new".
+
+Respond with ONLY a JSON object of this exact shape (no prose, no markdown):
+{
+  "decisions": [
+    { "candidateIndex": 0, "duplicateOf": "F-003" },
+    { "candidateIndex": 1, "duplicateOf": null }
+  ]
+}
+"candidateIndex" is the 0-based index into the candidates list you were given.
+"duplicateOf" is the public id of the matching existing finding, or null if the
+candidate is genuinely new.`
+
+const mergeDecisionSchema = z.object({
+  candidateIndex: z.number().int().nonnegative(),
+  duplicateOf: z.string().nullable().optional()
+})
+
+const mergeReportSchema = z.object({
+  decisions: z.array(mergeDecisionSchema)
+})
+
+function summarizeFindingForMerge(f: {
+  publicId?: string
+  bucket: string
+  title: string
+  description: string
+  filePath: string | null
+  line: number | null
+}, index?: number): string {
+  const head = f.publicId ? f.publicId : `N-${(index ?? 0) + 1}`
+  const loc = f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ''})` : ''
+  return `- ${head} [${f.bucket}]${loc}: ${f.title}\n    ${f.description}`
+}
+
+/**
+ * Split the candidate findings against those already on the PR: each candidate
+ * that duplicates an existing finding becomes a contribution (a "+1" note on
+ * the existing one); the rest are kept as new findings from this model.
+ *
+ * Runs a single classification call to the same model so it's cheap and shows
+ * up on the same progress line as the review itself.
+ */
+async function mergeAgainstExisting(
+  candidates: NewFinding[],
+  existing: Finding[],
+  model: string,
+  adoPrId: number
+): Promise<{ findings: NewFinding[]; additions: FindingContribution[] }> {
+  if (existing.length === 0 || candidates.length === 0) {
+    return { findings: candidates, additions: [] }
+  }
+
+  const existingBlock = existing.map((f) => summarizeFindingForMerge(f)).join('\n')
+  const candidateBlock = candidates.map((f, i) => summarizeFindingForMerge(f, i)).join('\n')
+
+  const existingIds = new Set(existing.map((f) => f.publicId))
+  logger.info(`review pr#${adoPrId}: merging ${candidates.length} new candidate(s) against ${existing.length} existing finding(s)`, {
+    model
+  })
+
+  let decisions: Array<{ candidateIndex: number; duplicateOf?: string | null }> = []
+  try {
+    const result = await complete({
+      model,
+      temperature: 0.1,
+      messages: [
+        { role: 'system', content: MERGE_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content:
+            `Existing findings on this PR:\n\n${existingBlock}\n\n` +
+            `New candidate findings from this review:\n\n${candidateBlock}\n\n` +
+            `Decide whether each candidate duplicates one of the existing findings, ` +
+            `then respond with the required JSON.`
+        }
+      ]
+    })
+    const raw = extractJsonObject(result.content ?? '')
+    const parsed = mergeReportSchema.safeParse(JSON.parse(raw))
+    if (parsed.success) decisions = parsed.data.decisions
+  } catch (e) {
+    logger.warn(`review pr#${adoPrId}: merge step failed, keeping all candidates as new`, {
+      error: (e as Error).message
+    })
+  }
+
+  const dupByIndex = new Map<number, string>()
+  for (const d of decisions) {
+    if (!d.duplicateOf) continue
+    const target = d.duplicateOf.trim()
+    if (!existingIds.has(target)) continue
+    if (d.candidateIndex < 0 || d.candidateIndex >= candidates.length) continue
+    if (dupByIndex.has(d.candidateIndex)) continue
+    dupByIndex.set(d.candidateIndex, target)
+  }
+
+  const findings: NewFinding[] = []
+  const additions: FindingContribution[] = []
+  for (let i = 0; i < candidates.length; i++) {
+    const target = dupByIndex.get(i)
+    if (target) {
+      // Preserve this reviewer's take by using its title as the contribution
+      // note — it'll be appended to the existing finding's description.
+      additions.push({ publicId: target, note: candidates[i].title })
+    } else {
+      findings.push(candidates[i])
+    }
+  }
+  logger.info(`review pr#${adoPrId}: merge kept ${findings.length} new finding(s), converted ${additions.length} to contribution(s)`)
   return { findings, additions }
 }
 
