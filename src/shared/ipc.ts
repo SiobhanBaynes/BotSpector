@@ -34,6 +34,7 @@ export const IPC = {
   prSetAdoStatus: 'pr:setAdoStatus',
   prSetDraft: 'pr:setDraft',
   prReview: 'pr:review',
+  prReviewPanel: 'pr:reviewPanel',
   prExplainDescription: 'pr:explainDescription',
   prExplainFileChange: 'pr:explainFileChange',
   prRefreshComments: 'pr:refreshComments',

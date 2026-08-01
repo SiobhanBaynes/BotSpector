@@ -45,6 +45,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   const [tab, setTab] = useState<Tab>('review')
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null)
   const [pinnedChange, setPinnedChange] = useState<PinnedChange | null>(null)
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [panelSelection, setPanelSelection] = useState<Set<string>>(new Set())
 
   const openInFiles = useCallback((path: string, line: number | null) => {
     setTab('files')
@@ -149,6 +151,31 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     setProgress('')
     if (res.ok) setReview(res.data)
     else setError(res.error)
+  }
+
+  async function runPanelReview(): Promise<void> {
+    const chosen = Array.from(panelSelection)
+    if (chosen.length === 0) return
+    setPanelOpen(false)
+    setReviewing(true)
+    setError(null)
+    setProgress(`Starting panel review (${chosen.length} reviewer${chosen.length === 1 ? '' : 's'})…`)
+    const res = await window.api.reviewPullRequestPanel(prId, chosen)
+    setReviewing(false)
+    setProgress('')
+    if (res.ok) setReview(res.data)
+    else setError(res.error)
+    // Reload so the review-history section reflects every new pass.
+    void load()
+  }
+
+  function togglePanelModel(id: string): void {
+    setPanelSelection((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   // Force-reload the PR summary and live Azure DevOps details. Useful when the
@@ -333,6 +360,17 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             'Review this PR'
           )}
         </button>
+        <PanelReviewControl
+          open={panelOpen}
+          setOpen={setPanelOpen}
+          models={models}
+          selection={panelSelection}
+          onToggle={togglePanelModel}
+          onRun={runPanelReview}
+          reviewedModels={new Set(reviewHistory.map((r) => r.model))}
+          hasReview={!!review}
+          disabled={isReviewing}
+        />
       </div>
 
       {stale && (
@@ -651,6 +689,100 @@ function ReviewHistory({
 
 function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+// The "Add reviewers" control: a button that toggles a popover for selecting
+// one or more models to run as an extra scrutiny pass. Each selected model's
+// findings are stacked on top of the current review — overlaps become "+1"
+// contributions on the existing finding, unique issues get added.
+function PanelReviewControl({
+  open,
+  setOpen,
+  models,
+  selection,
+  onToggle,
+  onRun,
+  reviewedModels,
+  hasReview,
+  disabled
+}: {
+  open: boolean
+  setOpen: (v: boolean) => void
+  models: CopilotModel[]
+  selection: Set<string>
+  onToggle: (id: string) => void
+  onRun: () => Promise<void> | void
+  reviewedModels: Set<string>
+  hasReview: boolean
+  disabled: boolean
+}): JSX.Element {
+  const count = selection.size
+  return (
+    <div className="panel-review-control">
+      <button
+        className="btn"
+        onClick={() => setOpen(!open)}
+        disabled={disabled}
+        title="Run additional reviewers on this PR. Each new model's findings stack on top of the current review — overlaps become +1 contributions."
+      >
+        {hasReview ? '+ Add reviewers' : '+ Panel review'}
+        {count > 0 ? ` (${count})` : ''}
+      </button>
+      {open && (
+        <>
+          <div className="panel-review-scrim" onClick={() => setOpen(false)} />
+          <div className="panel-review-menu" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-review-head">
+              <strong>Add reviewers</strong>
+              <p className="muted small">
+                Each model runs a fresh review. Overlapping findings become “+1” contributions on
+                the existing ones; unique issues get added.
+              </p>
+            </div>
+            <div className="panel-review-list">
+              {models.length === 0 && (
+                <div className="muted small">No models available. Check Copilot in Settings.</div>
+              )}
+              {models.map((m) => {
+                const already = reviewedModels.has(m.id)
+                const checked = selection.has(m.id)
+                return (
+                  <label key={m.id} className="panel-review-item">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggle(m.id)}
+                    />
+                    <span className="panel-review-item-name">{m.name}</span>
+                    {already && (
+                      <span
+                        className="panel-review-tag"
+                        title="This model has already reviewed this PR — running it again will re-check its own findings and re-consider new issues."
+                      >
+                        already reviewed
+                      </span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+            <div className="panel-review-actions">
+              <button className="btn subtle small-btn" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn primary small-btn"
+                onClick={() => void onRun()}
+                disabled={count === 0}
+              >
+                Run selected ({count})
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 // Map Azure DevOps comment-thread status values to friendly labels/styles.

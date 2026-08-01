@@ -756,12 +756,66 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // Run a single reviewer pass for one model. Extracted so it can be reused by
+  // both the single-model handler and the multi-model "panel review" handler.
+  // The caller owns the surrounding lifecycle (setting 'reviewing' status,
+  // emitting prReviewDone, etc.) so we don't fire duplicate events when
+  // stacking reviewers.
+  async function runReviewerPass(
+    prId: number,
+    model: string,
+    headCommit: string,
+    onProgress: (message: string) => void
+  ): Promise<void> {
+    const pr = repo.getPullRequest(prId)
+    if (!pr) throw new Error('Pull request not found')
+    const instructions = repo.getSetting('reviewInstructions') || undefined
+    const { findings, additions, raw } = await reviewPullRequest(
+      pr.adoPrId,
+      model,
+      instructions,
+      onProgress,
+      repo.listPostedComments(prId),
+      // Existing findings the new agent should not duplicate: everything raised
+      // by other models, plus this model's own findings that we preserve (those
+      // with a posted comment).
+      (repo.getReviewForPr(prId)?.findings ?? []).filter(
+        (f) => f.model !== model || f.comment?.status === 'posted'
+      )
+    )
+    repo.createReview(prId, model, findings, raw, headCommit)
+    // Merge this model's contributions into other agents' existing findings.
+    repo.applyContributions(prId, model, additions)
+    logger.info(
+      `review pass completed for pr id ${prId} (${model}): ${findings.length} new finding(s), ${additions.length} contribution(s)`
+    )
+  }
+
+  // Fetch the current head commit for the PR, updating the stored copy. Used at
+  // the start of a review so we can detect later changes.
+  async function captureHeadCommit(prId: number): Promise<string> {
+    const pr = repo.getPullRequest(prId)
+    if (!pr) throw new Error('Pull request not found')
+    let headCommit = pr.headCommit
+    try {
+      const fetched = await fetchPullRequestHeadCommit(pr.adoPrId)
+      if (fetched) {
+        headCommit = fetched
+        repo.updatePullRequestHeadCommit(prId, fetched)
+      }
+    } catch (e) {
+      logger.warn(`could not fetch head commit for pr id ${prId}`, {
+        error: (e as Error).message
+      })
+    }
+    return headCommit
+  }
+
   ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string): Promise<IpcResult<Review>> => {
     try {
       const pr = repo.getPullRequest(prId)
       if (!pr) throw new Error('Pull request not found')
       const model = resolveModel(modelArg)
-      const instructions = repo.getSetting('reviewInstructions') || undefined
 
       // Capture the current status/conversation of previously posted comments
       // before this re-review replaces the old findings, so that history is kept.
@@ -777,42 +831,13 @@ export function registerIpcHandlers(): void {
       send(IPC.prReviewProgress, { prId, message: 'Starting review…' })
       logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}`)
 
-      // Capture the current head commit so we can detect later changes.
-      let headCommit = pr.headCommit
-      try {
-        const fetched = await fetchPullRequestHeadCommit(pr.adoPrId)
-        if (fetched) {
-          headCommit = fetched
-          repo.updatePullRequestHeadCommit(prId, fetched)
-        }
-      } catch (e) {
-        logger.warn(`could not fetch head commit for pr id ${prId}`, {
-          error: (e as Error).message
-        })
-      }
-
-      const { findings, additions, raw } = await reviewPullRequest(
-        pr.adoPrId,
-        model,
-        instructions,
-        (message) => send(IPC.prReviewProgress, { prId, message }),
-        repo.listPostedComments(prId),
-        // Existing findings the new agent should not duplicate: everything raised
-        // by other models, plus this model's own findings that we preserve (those
-        // with a posted comment).
-        (repo.getReviewForPr(prId)?.findings ?? []).filter(
-          (f) => f.model !== model || f.comment?.status === 'posted'
-        )
+      const headCommit = await captureHeadCommit(prId)
+      await runReviewerPass(prId, model, headCommit, (message) =>
+        send(IPC.prReviewProgress, { prId, message })
       )
-      repo.createReview(prId, model, findings, raw, headCommit)
-      // Merge this model's contributions into other agents' existing findings.
-      repo.applyContributions(prId, model, additions)
       // A fresh review has untriaged (open) findings, so this lands as
       // 'in_progress'; it only becomes 'reviewed' once every finding is handled.
       repo.recomputeReviewStatus(prId)
-      logger.info(
-        `review completed for pr id ${prId}: ${findings.length} new finding(s), ${additions.length} contribution(s) at commit ${headCommit.slice(0, 8) || 'n/a'}`
-      )
 
       const review = repo.getReviewForPr(prId)
       if (!review) throw new Error('Review was not saved')
@@ -825,6 +850,74 @@ export function registerIpcHandlers(): void {
       return fail(e)
     }
   })
+
+  // Panel review: run several reviewers sequentially so their scrutiny stacks.
+  // Each pass sees the findings the earlier ones raised, so overlaps become
+  // "+1" contributions and only genuinely new issues are added.
+  ipcMain.handle(
+    IPC.prReviewPanel,
+    async (_e, prId: number, modelsArg: string[]): Promise<IpcResult<Review>> => {
+      try {
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const models = Array.isArray(modelsArg)
+          ? Array.from(new Set(modelsArg.map((m) => (m ?? '').trim()).filter(Boolean)))
+          : []
+        if (models.length === 0) throw new Error('No reviewers selected.')
+
+        try {
+          await syncCommentThreads(prId)
+        } catch (e) {
+          logger.warn(`could not sync comment threads before panel review for pr id ${prId}`, {
+            error: (e as Error).message
+          })
+        }
+
+        repo.setReviewStatus(prId, 'reviewing')
+        send(IPC.prReviewProgress, {
+          prId,
+          message: `Starting panel review with ${models.length} reviewer${models.length === 1 ? '' : 's'}…`
+        })
+        logger.info(
+          `panel review started for pr id ${prId} (ADO #${pr.adoPrId}) with models: ${models.join(', ')}`
+        )
+
+        const headCommit = await captureHeadCommit(prId)
+
+        for (let i = 0; i < models.length; i++) {
+          const model = models[i]
+          const prefix = `Reviewer ${i + 1}/${models.length} · ${model}`
+          send(IPC.prReviewProgress, { prId, message: `${prefix} · starting…` })
+          try {
+            await runReviewerPass(prId, model, headCommit, (message) =>
+              send(IPC.prReviewProgress, { prId, message: `${prefix} · ${message}` })
+            )
+          } catch (e) {
+            // Don't abandon the whole panel because one reviewer failed — log,
+            // surface via progress, and continue with the remaining models.
+            logger.error(`panel review: reviewer ${model} failed for pr id ${prId}`, {
+              error: (e as Error).message
+            })
+            send(IPC.prReviewProgress, {
+              prId,
+              message: `${prefix} · failed: ${(e as Error).message}`
+            })
+          }
+        }
+
+        repo.recomputeReviewStatus(prId)
+        const review = repo.getReviewForPr(prId)
+        if (!review) throw new Error('Review was not saved')
+        send(IPC.prReviewDone, { prId, status: 'reviewed' })
+        return ok(review)
+      } catch (e) {
+        repo.setReviewStatus(prId, 'error')
+        logger.error(`panel review failed for pr id ${prId}`, { error: (e as Error).message })
+        send(IPC.prReviewDone, { prId, status: 'error' })
+        return fail(e)
+      }
+    }
+  )
 
   // ---- findings ----
   ipcMain.handle(

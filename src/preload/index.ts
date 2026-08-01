@@ -129,6 +129,8 @@ const api = {
     ipcRenderer.invoke(IPC.prFetchImage, url),
   reviewPullRequest: (prId: number, model?: string): Promise<IpcResult<Review>> =>
     ipcRenderer.invoke(IPC.prReview, prId, model),
+  reviewPullRequestPanel: (prId: number, models: string[]): Promise<IpcResult<Review>> =>
+    ipcRenderer.invoke(IPC.prReviewPanel, prId, models),
   onReviewProgress: (cb: (p: ReviewProgress) => void): (() => void) => {
     const handler = (_e: unknown, payload: ReviewProgress): void => cb(payload)
     ipcRenderer.on(IPC.prReviewProgress, handler)
