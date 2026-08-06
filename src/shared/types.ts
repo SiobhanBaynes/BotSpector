@@ -161,7 +161,25 @@ export interface ChatMessage {
   content: string
 }
 
-export interface AgentInstructions {
+// A named prompt profile that shapes the reviewer for a particular focus (e.g.
+// general code review, UI review). Skills are identified by a stable slug and
+// swapped in as the reviewer's system-prompt instructions. They may also
+// declare file patterns to focus on and an MCP tool-name allowlist.
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  instructions: string
+  filePatterns?: string[]
+  toolAllowlist?: string[]
+  isBuiltIn: boolean
+}
+
+// The current effective instructions for a specific skill: what the reviewer
+// will use, whether that's the built-in default or a user override, and the
+// original default so the UI can offer a "reset" action.
+export interface SkillInstructions {
+  skillId: string
   instructions: string
   isDefault: boolean
   defaultInstructions: string

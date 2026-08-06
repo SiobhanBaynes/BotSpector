@@ -9,7 +9,8 @@ import type {
   CommentReply,
   Finding,
   PostedComment,
-  ResolutionAssessment
+  ResolutionAssessment,
+  Skill
 } from '../../shared/types'
 import type { FindingContribution, NewFinding } from '../db/repo'
 
@@ -84,10 +85,24 @@ function normalizeBucket(raw: string): (typeof FINDING_BUCKETS)[number] {
 // file-content tool.
 const EXCLUDED_TOOLS = [/pull_request_changes/i]
 
-async function mcpToolsAsDefinitions(): Promise<ToolDefinition[]> {
+// Compile a skill's tool allowlist (substring patterns, matched
+// case-insensitively) into regexes. Empty / undefined means "no extra filter".
+function compileToolAllowlist(patterns: string[] | undefined): RegExp[] | undefined {
+  if (!patterns || patterns.length === 0) return undefined
+  return patterns
+    .map((p) => (p ?? '').trim())
+    .filter((p) => p.length > 0)
+    .map((p) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))
+}
+
+async function mcpToolsAsDefinitions(
+  toolAllowlist?: string[]
+): Promise<ToolDefinition[]> {
   const tools = await listTools()
+  const allow = compileToolAllowlist(toolAllowlist)
   return tools
     .filter((t) => !EXCLUDED_TOOLS.some((re) => re.test(t.name)))
+    .filter((t) => (allow ? allow.some((re) => re.test(t.name)) : true))
     .map((t) => ({
       name: t.name,
       description: t.description.slice(0, 1024),
@@ -148,17 +163,39 @@ function buildPriorCommentsBlock(priorComments: PostedComment[]): string {
   )
 }
 
+// Build a focus block from a skill's file patterns so the model narrows its
+// attention. Kept as guidance (not a hard filter) because the changed-file
+// list already lives in the seed context — we just tell the model which parts
+// of it are relevant to this skill.
+function buildSkillFocusBlock(skill: Skill | undefined): string {
+  if (!skill) return ''
+  const patterns = (skill.filePatterns ?? []).filter((p) => p && p.trim().length > 0)
+  if (patterns.length === 0) return ''
+  return (
+    `\n\nFocus on files matching: ${patterns.join(', ')}. ` +
+    `Ignore changes outside these patterns unless they clearly affect the same area.`
+  )
+}
+
 export async function reviewPullRequest(
   adoPrId: number,
   model: string,
   instructions?: string,
   onProgress: ProgressFn = () => {},
   priorComments: PostedComment[] = [],
-  existingFindings: Finding[] = []
+  existingFindings: Finding[] = [],
+  skill?: Skill
 ): Promise<{ findings: NewFinding[]; additions: FindingContribution[]; raw: string }> {
   onProgress('Gathering pull request context…')
   const context = await getPullRequestContext(adoPrId)
-  const tools = await mcpToolsAsDefinitions()
+  const tools = await mcpToolsAsDefinitions(skill?.toolAllowlist)
+  if (skill) {
+    logger.info(`review pr#${adoPrId}: using skill "${skill.id}"`, {
+      filePatterns: skill.filePatterns?.length ?? 0,
+      toolAllowlist: skill.toolAllowlist?.length ?? 0,
+      toolCount: tools.length
+    })
+  }
 
   // The reviewer runs blind: it is deliberately NOT shown findings raised by
   // other models. Otherwise it tends to defer to them ("+1 to F-003") and
@@ -171,6 +208,7 @@ export async function reviewPullRequest(
       content:
         `Review pull request #${adoPrId}. Here is the context already gathered.\n\n` +
         `${context.summary || '(no details fetched; use tools to gather them)'}` +
+        `${buildSkillFocusBlock(skill)}` +
         `${buildPriorCommentsBlock(priorComments)}\n\n` +
         `Use the available Azure DevOps tools to inspect changed files as needed, then ` +
         `produce your JSON findings report.`
@@ -720,25 +758,85 @@ export async function explainFinding(finding: Finding, model: string): Promise<s
   return (result.content ?? '').trim()
 }
 
-export async function explainPullRequest(description: string, model: string): Promise<string> {
-  const result = await complete({
-    model,
-    temperature: 0.2,
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You explain a pull request to a non-expert in plain, approachable language. ' +
-          'Summarize what the change does and why, in a short paragraph or a few bullet points. ' +
-          'Avoid jargon; if you must use a technical term, briefly define it.'
-      },
-      {
-        role: 'user',
-        content: `Explain this pull request description:\n\n${description}`
+export async function explainPullRequest(
+  adoPrId: number,
+  model: string,
+  description: string,
+  onProgress: ProgressFn = () => {}
+): Promise<string> {
+  onProgress('Gathering pull request context…')
+  const context = await getPullRequestContext(adoPrId)
+  const tools = await mcpToolsAsDefinitions()
+
+  const messages: AgentMessage[] = [
+    {
+      role: 'system',
+      content:
+        'You explain a pull request to a non-expert in plain, approachable language. ' +
+        'Base your explanation on what the code actually changes: read the changed files ' +
+        'and their diffs with the available tools rather than trusting the author-provided ' +
+        'description, which may be missing, incomplete, wrong, or out of date. ' +
+        'Summarize what the change does and why, in a short paragraph or a few bullet points. ' +
+        'Avoid jargon; if you must use a technical term, briefly define it. If the description ' +
+        'conflicts with the code, trust the code and briefly note the discrepancy.'
+    },
+    {
+      role: 'user',
+      content:
+        `Explain pull request #${adoPrId}. Here is the context already gathered.\n\n` +
+        `${context.summary || '(no details fetched; use tools to gather them)'}\n\n` +
+        `Author-provided description (a hint only — may be inaccurate or empty):\n` +
+        `${description.trim() || '(no description provided)'}\n\n` +
+        `Read the changed files/diffs you need, then give your explanation.`
+    }
+  ]
+
+  let finalContent: string | null = null
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const result = await complete({ model, messages, tools })
+    if (result.toolCalls.length > 0) {
+      messages.push({ role: 'assistant', content: result.content, toolCalls: result.toolCalls })
+      for (const call of result.toolCalls) {
+        onProgress(`Reading Azure DevOps: ${call.name}…`)
+        let toolResult: string
+        try {
+          const args = call.arguments ? JSON.parse(call.arguments) : {}
+          toolResult = await callTool(call.name, args)
+        } catch (e) {
+          toolResult = `Error: ${(e as Error).message}`
+        }
+        messages.push({
+          role: 'tool',
+          toolCallId: call.id,
+          name: call.name,
+          content:
+            toolResult.length > MAX_TOOL_RESULT_CHARS
+              ? toolResult.slice(0, MAX_TOOL_RESULT_CHARS) +
+                `\n\n[…truncated ${toolResult.length - MAX_TOOL_RESULT_CHARS} more characters. ` +
+                `Read specific files with the file-content tool instead of fetching everything at once.]`
+              : toolResult
+        })
       }
-    ]
-  })
-  return (result.content ?? '').trim()
+      onProgress('Reviewing the changes…')
+      continue
+    }
+    finalContent = result.content ?? ''
+    break
+  }
+
+  if (finalContent === null) {
+    onProgress('Writing the explanation…')
+    messages.push({
+      role: 'user',
+      content:
+        'Stop calling tools and give your explanation now, based only on what you have gathered.'
+    })
+    const finalResult = await complete({ model, messages })
+    finalContent = finalResult.content ?? ''
+  }
+
+  onProgress('Writing the explanation…')
+  return finalContent.trim()
 }
 
 export async function explainFileChange(

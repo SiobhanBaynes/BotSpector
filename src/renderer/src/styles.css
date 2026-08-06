@@ -357,6 +357,18 @@ a {
   align-items: center;
   gap: 8px;
 }
+.review-header .spacer {
+  flex: 1;
+}
+/* Stacked label + control block inside the review dialog. */
+.review-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.review-dialog-field > .status-select {
+  width: 100%;
+}
 .status-select {
   background: var(--panel-2);
   color: var(--text);
@@ -1177,6 +1189,16 @@ a {
   justify-content: space-between;
   margin-bottom: 6px;
 }
+.pr-description-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.explain-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .pr-description {
   white-space: pre-wrap;
   background: var(--bg);
@@ -1608,5 +1630,8 @@ a {
   gap: 8px;
   justify-content: flex-end;
   align-items: center;
+}
+.panel-review-actions .spacer {
+  flex: 1;
 }
 
