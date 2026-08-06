@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { diffLines } from 'diff'
 import { IPC } from '../shared/ipc'
 import type {
@@ -64,10 +64,11 @@ import {
 } from './agent/reviewer'
 import {
   GENERAL_SKILL_ID,
-  getBuiltinSkill,
-  listBuiltinSkills,
+  getSkill,
+  listAllSkills,
   skillOverrideSettingKey
 } from './agent/skills'
+import { importSkillFromFolder, importSkillFromGit, removeUserSkill, userSkillsDir } from './agent/skillStore'
 import { openLogs, logger } from './logger'
 
 function ok<T>(data: T): IpcResult<T> {
@@ -242,7 +243,7 @@ export function registerIpcHandlers(): void {
   // user's override — if any — spliced in. Kept in one place so both the
   // read/write IPCs and the reviewer resolve skills identically.
   function readSkillInstructions(skillId: string): SkillInstructions | null {
-    const skill = getBuiltinSkill(skillId)
+    const skill = getSkill(skillId)
     if (!skill) return null
     const override = repo.getSetting(skillOverrideSettingKey(skillId))
     return {
@@ -255,7 +256,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.skillList, (): IpcResult<Skill[]> => {
     try {
-      return ok(listBuiltinSkills())
+      return ok(listAllSkills())
     } catch (e) {
       return fail(e)
     }
@@ -278,9 +279,9 @@ export function registerIpcHandlers(): void {
     IPC.skillSaveInstructions,
     (_e, skillId: string, instructions: string): IpcResult<SkillInstructions> => {
       try {
-        const skill = getBuiltinSkill(skillId)
+        const skill = getSkill(skillId)
         if (!skill) throw new Error(`Unknown skill: ${skillId}`)
-        // An empty value (or the exact default) resets to the built-in default.
+        // An empty value (or the exact default) resets to the skill's default.
         const trimmed = (instructions ?? '').trim()
         const value = trimmed && trimmed !== skill.instructions.trim() ? trimmed : ''
         repo.setSetting(skillOverrideSettingKey(skillId), value)
@@ -292,6 +293,60 @@ export function registerIpcHandlers(): void {
       }
     }
   )
+
+  // Import an external ("user") skill from a SKILL.md folder the user selects.
+  ipcMain.handle(IPC.skillImport, async (): Promise<IpcResult<Skill>> => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const result = await dialog.showOpenDialog(win, {
+        title: 'Select a skill folder (containing SKILL.md)',
+        properties: ['openDirectory']
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        throw new Error('Import cancelled.')
+      }
+      const skill = importSkillFromFolder(result.filePaths[0])
+      return ok(skill)
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  // Import an external skill directly from a Git repository (optionally pinned
+  // to a ref and/or a subdirectory: "<url>#<ref>:<subdir>").
+  ipcMain.handle(IPC.skillImportGit, async (_e, spec: string): Promise<IpcResult<Skill>> => {
+    try {
+      const skill = await importSkillFromGit(spec)
+      return ok(skill)
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  // Reveal the imported-skills folder in the OS file manager.
+  ipcMain.handle(IPC.skillOpenFolder, async (): Promise<IpcResult<null>> => {
+    try {
+      await shell.openPath(userSkillsDir())
+      return ok(null)
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  // Remove an imported user skill (built-ins can't be removed). Also clears any
+  // saved instruction override for it.
+  ipcMain.handle(IPC.skillRemove, (_e, skillId: string): IpcResult<Skill[]> => {
+    try {
+      const skill = getSkill(skillId)
+      if (!skill) throw new Error(`Unknown skill: ${skillId}`)
+      if (skill.source !== 'user') throw new Error('Built-in skills cannot be removed.')
+      removeUserSkill(skillId)
+      repo.setSetting(skillOverrideSettingKey(skillId), '')
+      return ok(listAllSkills())
+    } catch (e) {
+      return fail(e)
+    }
+  })
 
   // ---- pull requests ----
   ipcMain.handle(IPC.prListCached, (): IpcResult<PullRequest[]> => {
@@ -806,7 +861,7 @@ export function registerIpcHandlers(): void {
   ): Promise<void> {
     const pr = repo.getPullRequest(prId)
     if (!pr) throw new Error('Pull request not found')
-    const skill = getBuiltinSkill(skillId) ?? getBuiltinSkill(GENERAL_SKILL_ID)
+    const skill = getSkill(skillId) ?? getSkill(GENERAL_SKILL_ID)
     if (!skill) throw new Error('No review skill available')
     const override = repo.getSetting(skillOverrideSettingKey(skill.id))
     const instructions = override || skill.instructions

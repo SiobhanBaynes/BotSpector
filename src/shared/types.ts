@@ -165,6 +165,11 @@ export interface ChatMessage {
 // general code review, UI review). Skills are identified by a stable slug and
 // swapped in as the reviewer's system-prompt instructions. They may also
 // declare file patterns to focus on and an MCP tool-name allowlist.
+//
+// Skills come from two sources: 'builtin' (shipped with the app) and 'user'
+// (imported from an on-disk SKILL.md folder, Anthropic-style).
+export type SkillSource = 'builtin' | 'user'
+
 export interface Skill {
   id: string
   name: string
@@ -172,6 +177,11 @@ export interface Skill {
   instructions: string
   filePatterns?: string[]
   toolAllowlist?: string[]
+  source: SkillSource
+  // For imported skills: where the SKILL.md folder lives and its declared
+  // version (from frontmatter), for display and update purposes.
+  path?: string
+  version?: string
   isBuiltIn: boolean
 }
 

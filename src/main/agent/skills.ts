@@ -1,5 +1,6 @@
 import type { Skill } from '../../shared/types'
 import { DEFAULT_REVIEW_INSTRUCTIONS } from './reviewer'
+import { listUserSkills } from './skillStore'
 
 // Built-in skills shipped with the app. Each one is a named prompt profile
 // that swaps in as the reviewer's editable instructions. Users can override
@@ -73,6 +74,7 @@ export const BUILTIN_SKILLS: Skill[] = [
     description:
       'The default reviewer: broad code-quality, correctness, and design feedback across the whole PR.',
     instructions: DEFAULT_REVIEW_INSTRUCTIONS,
+    source: 'builtin',
     isBuiltIn: true
   },
   {
@@ -93,6 +95,7 @@ export const BUILTIN_SKILLS: Skill[] = [
       '**/*.less',
       '**/*.html'
     ],
+    source: 'builtin',
     isBuiltIn: true
   },
   {
@@ -101,6 +104,7 @@ export const BUILTIN_SKILLS: Skill[] = [
     description:
       'Vulnerability-focused review: injection, auth/authz, secrets, XSS, unsafe deserialization, and misconfiguration.',
     instructions: SECURITY_SKILL_INSTRUCTIONS,
+    source: 'builtin',
     isBuiltIn: true
   }
 ]
@@ -111,6 +115,19 @@ export function listBuiltinSkills(): Skill[] {
 
 export function getBuiltinSkill(id: string): Skill | undefined {
   return BUILTIN_SKILLS.find((s) => s.id === id)
+}
+
+// All skills the reviewer can use: the built-ins plus any user-imported skills
+// loaded from disk. Built-ins win on id collisions so a user can't shadow the
+// General skill.
+export function listAllSkills(): Skill[] {
+  const builtinIds = new Set(BUILTIN_SKILLS.map((s) => s.id))
+  const user = listUserSkills().filter((s) => !builtinIds.has(s.id))
+  return [...BUILTIN_SKILLS, ...user]
+}
+
+export function getSkill(id: string): Skill | undefined {
+  return getBuiltinSkill(id) ?? listUserSkills().find((s) => s.id === id)
 }
 
 // Storage-key helper for a per-skill instruction override. Kept in one place

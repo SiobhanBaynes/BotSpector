@@ -601,6 +601,46 @@ export async function fetchPullRequestComments(adoPrId: number): Promise<AdoComm
 }
 
 /**
+ * Fetch a file's text content directly from the Azure DevOps REST "Items" API
+ * at an exact commit (or branch), using the PAT. Unlike the MCP file-content
+ * tool — which some servers resolve at the branch tip regardless of the version
+ * we pass — this honours the requested commit, so base→head diffs actually
+ * differ. Returns:
+ *   - the raw file text on success,
+ *   - '' when the file does not exist at that version (added/deleted), and
+ *   - null when REST is unavailable (no PAT/config) so callers can fall back.
+ */
+async function fetchFileContentRest(
+  filePath: string,
+  opts: { commit?: string; branch?: string }
+): Promise<string | null> {
+  const cfg = restConfig()
+  if (!cfg) return null
+
+  const path = filePath.startsWith('/') ? filePath : `/${filePath}`
+  const params = new URLSearchParams({ path, 'api-version': '7.1' })
+  if (opts.commit) {
+    params.set('versionDescriptor.version', opts.commit)
+    params.set('versionDescriptor.versionType', 'commit')
+  } else if (opts.branch) {
+    params.set('versionDescriptor.version', opts.branch)
+    params.set('versionDescriptor.versionType', 'branch')
+  }
+
+  const url =
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/items?${params.toString()}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'text/plain' }
+  })
+  // 404 means the file didn't exist at this version (e.g. an added file has no
+  // "before"); treat that as empty so the diff renders it as fully added.
+  if (res.status === 404) return ''
+  if (!res.ok) return null
+  return await res.text()
+}
+
+/**
  * Fetch the text content of a file from the repository, preferring a specific
  * commit (so we show the exact lines that were reviewed), falling back to a
  * branch. Returns the raw file text.
@@ -609,6 +649,11 @@ export async function fetchFileContent(
   filePath: string,
   opts: { commit?: string; branch?: string }
 ): Promise<string | null> {
+  // Prefer the REST Items API: it honours the exact commit/branch, which the
+  // MCP tool may not. Only fall back to MCP when REST is unavailable (null).
+  const viaRest = await fetchFileContentRest(filePath, opts).catch(() => null)
+  if (viaRest !== null) return viaRest
+
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
 

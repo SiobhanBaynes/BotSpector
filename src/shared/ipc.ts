@@ -20,6 +20,10 @@ export const IPC = {
   skillList: 'skill:list',
   skillGetInstructions: 'skill:getInstructions',
   skillSaveInstructions: 'skill:saveInstructions',
+  skillImport: 'skill:import',
+  skillImportGit: 'skill:importGit',
+  skillOpenFolder: 'skill:openFolder',
+  skillRemove: 'skill:remove',
 
   // Pull requests
   prList: 'pr:list',
