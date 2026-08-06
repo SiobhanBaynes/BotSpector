@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
   AdoCommentThread,
-  AgentInstructions,
   ChangedFile,
   ChatMessage,
   CodeSnippet,
@@ -19,7 +18,9 @@ import type {
   Review,
   ReviewStatus,
   ReviewSummary,
-  Settings
+  Settings,
+  Skill,
+  SkillInstructions
 } from '../shared/types'
 
 export interface ReviewProgress {
@@ -61,11 +62,15 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.copilotLoginStatus, handler)
   },
 
-  // agent instructions
-  getAgentInstructions: (): Promise<IpcResult<AgentInstructions>> =>
-    ipcRenderer.invoke(IPC.agentGetInstructions),
-  saveAgentInstructions: (instructions: string): Promise<IpcResult<AgentInstructions>> =>
-    ipcRenderer.invoke(IPC.agentSaveInstructions, instructions),
+  // skills
+  listSkills: (): Promise<IpcResult<Skill[]>> => ipcRenderer.invoke(IPC.skillList),
+  getSkillInstructions: (skillId: string): Promise<IpcResult<SkillInstructions>> =>
+    ipcRenderer.invoke(IPC.skillGetInstructions, skillId),
+  saveSkillInstructions: (
+    skillId: string,
+    instructions: string
+  ): Promise<IpcResult<SkillInstructions>> =>
+    ipcRenderer.invoke(IPC.skillSaveInstructions, skillId, instructions),
 
   // pull requests
   listPullRequests: (): Promise<IpcResult<PullRequest[]>> => ipcRenderer.invoke(IPC.prList),
@@ -127,14 +132,27 @@ const api = {
     ipcRenderer.invoke(IPC.prGetFileDiff, prId, path),
   fetchImage: (url: string): Promise<IpcResult<string | null>> =>
     ipcRenderer.invoke(IPC.prFetchImage, url),
-  reviewPullRequest: (prId: number, model?: string): Promise<IpcResult<Review>> =>
-    ipcRenderer.invoke(IPC.prReview, prId, model),
-  reviewPullRequestPanel: (prId: number, models: string[]): Promise<IpcResult<Review>> =>
-    ipcRenderer.invoke(IPC.prReviewPanel, prId, models),
+  reviewPullRequest: (
+    prId: number,
+    model?: string,
+    skillId?: string
+  ): Promise<IpcResult<Review>> =>
+    ipcRenderer.invoke(IPC.prReview, prId, model, skillId),
+  reviewPullRequestPanel: (
+    prId: number,
+    models: string[],
+    skillId?: string
+  ): Promise<IpcResult<Review>> =>
+    ipcRenderer.invoke(IPC.prReviewPanel, prId, models, skillId),
   onReviewProgress: (cb: (p: ReviewProgress) => void): (() => void) => {
     const handler = (_e: unknown, payload: ReviewProgress): void => cb(payload)
     ipcRenderer.on(IPC.prReviewProgress, handler)
     return () => ipcRenderer.removeListener(IPC.prReviewProgress, handler)
+  },
+  onExplainProgress: (cb: (p: ReviewProgress) => void): (() => void) => {
+    const handler = (_e: unknown, payload: ReviewProgress): void => cb(payload)
+    ipcRenderer.on(IPC.prExplainProgress, handler)
+    return () => ipcRenderer.removeListener(IPC.prExplainProgress, handler)
   },
   onReviewDone: (cb: (p: ReviewDone) => void): (() => void) => {
     const handler = (_e: unknown, payload: ReviewDone): void => cb(payload)

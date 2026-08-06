@@ -9,7 +9,8 @@ import type {
   PullRequest,
   Review,
   ReviewStatus,
-  ReviewSummary
+  ReviewSummary,
+  Skill
 } from '../../../shared/types'
 import { FINDING_BUCKETS } from '../../../shared/types'
 import { FindingCard } from '../components/FindingCard'
@@ -24,6 +25,11 @@ interface Props {
   onBack: () => void
 }
 
+// localStorage keys for the remembered review-dialog choice (skill + models),
+// so a preference carries across PRs until the user resets it.
+const REVIEW_MODELS_KEY = 'botspector.reviewModels'
+const REVIEW_SKILL_KEY = 'botspector.reviewSkill'
+
 type StatusFilter = 'all' | FindingStatus
 type Tab = 'review' | 'files' | 'comments' | 'chat'
 
@@ -34,19 +40,38 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   const [postedComments, setPostedComments] = useState<PostedComment[]>([])
   const [adoDetails, setAdoDetails] = useState<PrAdoDetails | null>(null)
   const [models, setModels] = useState<CopilotModel[]>([])
-  const [selectedModel, setSelectedModel] = useState<string>(defaultModel)
+  const [skills, setSkills] = useState<Skill[]>([])
+  const [selectedSkillId, setSelectedSkillId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(REVIEW_SKILL_KEY) || 'general'
+    } catch {
+      return 'general'
+    }
+  })
   const [reviewing, setReviewing] = useState(false)
   const [refreshingPr, setRefreshingPr] = useState(false)
   const [progress, setProgress] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [explanation, setExplanation] = useState<string | null>(null)
   const [explaining, setExplaining] = useState(false)
+  const [explainProgress, setExplainProgress] = useState('')
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [tab, setTab] = useState<Tab>('review')
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null)
   const [pinnedChange, setPinnedChange] = useState<PinnedChange | null>(null)
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [panelSelection, setPanelSelection] = useState<Set<string>>(new Set())
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false)
+  const [dialogModels, setDialogModels] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(REVIEW_MODELS_KEY)
+      if (saved) {
+        const ids = JSON.parse(saved) as string[]
+        if (Array.isArray(ids)) return new Set(ids.filter((id) => typeof id === 'string'))
+      }
+    } catch {
+      // ignore malformed storage
+    }
+    return new Set()
+  })
 
   const openInFiles = useCallback((path: string, line: number | null) => {
     setTab('files')
@@ -98,10 +123,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     void load()
   }, [load])
 
-  // Load the available Copilot models for the per-PR model selector. Default to
-  // the Settings model; fall back to it if listing fails.
+  // Load the available Copilot models so the review dialog can list them.
   useEffect(() => {
-    setSelectedModel((m) => m || defaultModel)
     let active = true
     void window.api.copilotListModels().then((res) => {
       if (active && res.ok) setModels(res.data)
@@ -109,7 +132,18 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     return () => {
       active = false
     }
-  }, [defaultModel])
+  }, [])
+
+  // Load the available review skills so the user can pick one to focus this run.
+  useEffect(() => {
+    let active = true
+    void window.api.listSkills().then((res) => {
+      if (active && res.ok) setSkills(res.data)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   // Fetch live Azure DevOps state (status, draft, reviewer votes) separately so
   // its network latency doesn't hold up the main review load.
@@ -130,6 +164,15 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     return unsub
   }, [prId])
 
+  // The agentic "Explain this PR" action reports progress as it reads the
+  // changed files; surface it next to the button.
+  useEffect(() => {
+    const unsub = window.api.onExplainProgress((p) => {
+      if (p.prId === prId) setExplainProgress(p.message)
+    })
+    return unsub
+  }, [prId])
+
   // A review runs in the main process, so it keeps going even if we navigate
   // away and remount. Listen for its completion to reload the finished review.
   useEffect(() => {
@@ -142,25 +185,28 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     return unsub
   }, [prId, load])
 
-  async function runReview(): Promise<void> {
-    setReviewing(true)
-    setError(null)
-    setProgress('Starting…')
-    const res = await window.api.reviewPullRequest(prId, selectedModel)
-    setReviewing(false)
-    setProgress('')
-    if (res.ok) setReview(res.data)
-    else setError(res.error)
-  }
-
-  async function runPanelReview(): Promise<void> {
-    const chosen = Array.from(panelSelection)
+  async function runReviewFromDialog(): Promise<void> {
+    const chosen = Array.from(dialogModels)
     if (chosen.length === 0) return
-    setPanelOpen(false)
+    // Remember this choice so it carries across PRs (reset restores defaults).
+    try {
+      localStorage.setItem(REVIEW_MODELS_KEY, JSON.stringify(chosen))
+      localStorage.setItem(REVIEW_SKILL_KEY, selectedSkillId)
+    } catch {
+      // ignore storage failures
+    }
+    setReviewDialogOpen(false)
     setReviewing(true)
     setError(null)
-    setProgress(`Starting panel review (${chosen.length} reviewer${chosen.length === 1 ? '' : 's'})…`)
-    const res = await window.api.reviewPullRequestPanel(prId, chosen)
+    const isPanel = chosen.length > 1
+    setProgress(
+      isPanel
+        ? `Starting panel review (${chosen.length} reviewers)…`
+        : 'Starting…'
+    )
+    const res = isPanel
+      ? await window.api.reviewPullRequestPanel(prId, chosen, selectedSkillId)
+      : await window.api.reviewPullRequest(prId, chosen[0], selectedSkillId)
     setReviewing(false)
     setProgress('')
     if (res.ok) setReview(res.data)
@@ -169,13 +215,38 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     void load()
   }
 
-  function togglePanelModel(id: string): void {
-    setPanelSelection((prev) => {
+  // Open the review dialog. Drops any remembered models that are no longer
+  // available and, if nothing is left, seeds with the default model.
+  function openReviewDialog(): void {
+    setDialogModels((prev) => {
+      const available = new Set(models.map((m) => m.id))
+      const kept = new Set(Array.from(prev).filter((id) => available.has(id)))
+      if (kept.size > 0) return kept
+      return new Set(defaultModel ? [defaultModel] : [])
+    })
+    setReviewDialogOpen(true)
+  }
+
+  function toggleDialogModel(id: string): void {
+    setDialogModels((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
+  }
+
+  // Restore the dialog to the app defaults: the general skill and the default
+  // model, clearing any remembered choice.
+  function resetReviewDialog(): void {
+    setSelectedSkillId('general')
+    setDialogModels(new Set(defaultModel ? [defaultModel] : []))
+    try {
+      localStorage.removeItem(REVIEW_MODELS_KEY)
+      localStorage.removeItem(REVIEW_SKILL_KEY)
+    } catch {
+      // ignore storage failures
+    }
   }
 
   // Force-reload the PR summary and live Azure DevOps details. Useful when the
@@ -199,8 +270,10 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   async function explainPr(): Promise<void> {
     setExplaining(true)
     setError(null)
-    const res = await window.api.explainPrDescription(prId, selectedModel)
+    setExplainProgress('Starting…')
+    const res = await window.api.explainPrDescription(prId, defaultModel)
     setExplaining(false)
+    setExplainProgress('')
     if (res.ok) setExplanation(res.data)
     else setError(res.error)
   }
@@ -329,47 +402,23 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             </select>
           )}
         </div>
-        <div className="review-model-control">
-          <span className="muted small">Model</span>
-          <select
-            className="status-select"
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            disabled={isReviewing}
-            title="Model used for the review and AI actions on this PR"
-          >
-            {!models.some((m) => m.id === selectedModel) && selectedModel && (
-              <option value={selectedModel}>{selectedModel}</option>
-            )}
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-                {m.id === defaultModel ? ' (default)' : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button className="btn primary" onClick={runReview} disabled={isReviewing}>
-          {isReviewing ? (
-            <>
-              <span className="spinner" /> Reviewing…
-            </>
-          ) : review ? (
-            'Review with this model'
-          ) : (
-            'Review this PR'
-          )}
-        </button>
-        <PanelReviewControl
-          open={panelOpen}
-          setOpen={setPanelOpen}
+        <div className="spacer" />
+        <ReviewDialog
+          open={reviewDialogOpen}
+          onOpen={openReviewDialog}
+          onClose={() => setReviewDialogOpen(false)}
           models={models}
-          selection={panelSelection}
-          onToggle={togglePanelModel}
-          onRun={runPanelReview}
+          defaultModel={defaultModel}
+          selectedModels={dialogModels}
+          onToggleModel={toggleDialogModel}
+          skills={skills}
+          selectedSkillId={selectedSkillId}
+          onSkillChange={setSelectedSkillId}
           reviewedModels={new Set(reviewHistory.map((r) => r.model))}
           hasReview={!!review}
-          disabled={isReviewing}
+          isReviewing={isReviewing}
+          onRun={runReviewFromDialog}
+          onReset={resetReviewDialog}
         />
       </div>
 
@@ -445,13 +494,21 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
           <div className="pr-description-block">
             <div className="pr-description-head">
               <strong>Description</strong>
-              <button
-                className="btn"
-                onClick={explainPr}
-                disabled={explaining || !pr.description.trim()}
-              >
-                {explaining ? 'Explaining…' : 'Explain this PR'}
-              </button>
+              <div className="pr-description-head-actions">
+                {explaining && explainProgress && (
+                  <span className="muted small explain-progress">
+                    <span className="spinner" /> {explainProgress}
+                  </span>
+                )}
+                <button
+                  className="btn"
+                  onClick={explainPr}
+                  disabled={explaining}
+                  title="Explain this PR from its actual code changes (the description is only used as a hint)"
+                >
+                  {explaining ? 'Explaining…' : 'Explain this PR'}
+                </button>
+              </div>
             </div>
             <div className="pr-description">
               {pr.description.trim() ? (
@@ -511,13 +568,13 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
 
       {/* Files tab stays mounted so it prefetches diffs in the background. */}
       <div style={{ display: tab === 'files' ? 'block' : 'none' }}>
-        <FilesTab prId={prId} model={selectedModel} request={fileRequest} onChatAbout={chatAboutChange} />
+        <FilesTab prId={prId} model={defaultModel} request={fileRequest} onChatAbout={chatAboutChange} />
       </div>
 
       {tab === 'comments' && (
         <AdoCommentsTab
           prId={prId}
-          model={selectedModel}
+          model={defaultModel}
           onOpenInFiles={openInFiles}
           onFindingCreated={load}
         />
@@ -527,7 +584,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
       <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
         <ChatTab
           prId={prId}
-          model={selectedModel}
+          model={defaultModel}
           pinnedChange={pinnedChange}
           onClearPinnedChange={() => setPinnedChange(null)}
           onFindingCreated={load}
@@ -580,7 +637,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
                   <FindingCard
                     key={f.id}
                     finding={f}
-                    model={selectedModel}
+                    model={defaultModel}
                     onChanged={load}
                     onOpenInFiles={openInFiles}
                     onChatAbout={chatAboutFinding}
@@ -691,83 +748,129 @@ function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
 }
 
-// The "Add reviewers" control: a button that toggles a popover for selecting
-// one or more models to run as an extra scrutiny pass. Each selected model's
-// findings are stacked on top of the current review — overlaps become "+1"
-// contributions on the existing finding, unique issues get added.
-function PanelReviewControl({
+// The unified "Review this PR" control: a primary button that opens a dialog
+// to choose a skill and one or more models. Selecting a single model runs a
+// normal review; selecting several runs a panel review where each model's
+// findings stack — overlaps become "+1" contributions, unique issues get added.
+function ReviewDialog({
   open,
-  setOpen,
+  onOpen,
+  onClose,
   models,
-  selection,
-  onToggle,
-  onRun,
+  defaultModel,
+  selectedModels,
+  onToggleModel,
+  skills,
+  selectedSkillId,
+  onSkillChange,
   reviewedModels,
   hasReview,
-  disabled
+  isReviewing,
+  onRun,
+  onReset
 }: {
   open: boolean
-  setOpen: (v: boolean) => void
+  onOpen: () => void
+  onClose: () => void
   models: CopilotModel[]
-  selection: Set<string>
-  onToggle: (id: string) => void
-  onRun: () => Promise<void> | void
+  defaultModel: string
+  selectedModels: Set<string>
+  onToggleModel: (id: string) => void
+  skills: Skill[]
+  selectedSkillId: string
+  onSkillChange: (id: string) => void
   reviewedModels: Set<string>
   hasReview: boolean
-  disabled: boolean
+  isReviewing: boolean
+  onRun: () => Promise<void> | void
+  onReset: () => void
 }): JSX.Element {
-  const count = selection.size
+  const count = selectedModels.size
+  const activeSkill = skills.find((s) => s.id === selectedSkillId)
   return (
     <div className="panel-review-control">
       <button
-        className="btn"
-        onClick={() => setOpen(!open)}
-        disabled={disabled}
-        title="Run additional reviewers on this PR. Each new model's findings stack on top of the current review — overlaps become +1 contributions."
+        className="btn primary"
+        onClick={onOpen}
+        disabled={isReviewing}
+        title="Choose a skill and one or more models, then run the review."
       >
-        {hasReview ? '+ Add reviewers' : '+ Panel review'}
-        {count > 0 ? ` (${count})` : ''}
+        {isReviewing ? (
+          <>
+            <span className="spinner" /> Reviewing…
+          </>
+        ) : hasReview ? (
+          'Re-review…'
+        ) : (
+          'Review this PR'
+        )}
       </button>
       {open && (
         <>
-          <div className="panel-review-scrim" onClick={() => setOpen(false)} />
+          <div className="panel-review-scrim" onClick={onClose} />
           <div className="panel-review-menu" onClick={(e) => e.stopPropagation()}>
             <div className="panel-review-head">
-              <strong>Add reviewers</strong>
+              <strong>Review this PR</strong>
               <p className="muted small">
-                Each model runs a fresh review. Overlapping findings become “+1” contributions on
-                the existing ones; unique issues get added.
+                Pick a skill and one or more models. Several models run as a panel: overlapping
+                findings become “+1” contributions on the existing ones; unique issues get added.
               </p>
             </div>
-            <div className="panel-review-list">
-              {models.length === 0 && (
-                <div className="muted small">No models available. Check Copilot in Settings.</div>
-              )}
-              {models.map((m) => {
-                const already = reviewedModels.has(m.id)
-                const checked = selection.has(m.id)
-                return (
-                  <label key={m.id} className="panel-review-item">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => onToggle(m.id)}
-                    />
-                    <span className="panel-review-item-name">{m.name}</span>
-                    {already && (
-                      <span
-                        className="panel-review-tag"
-                        title="This model has already reviewed this PR — running it again will re-check its own findings and re-consider new issues."
-                      >
-                        already reviewed
+
+            <label className="review-dialog-field">
+              <span className="muted small">Skill</span>
+              <select
+                className="status-select"
+                value={selectedSkillId}
+                onChange={(e) => onSkillChange(e.target.value)}
+                disabled={skills.length === 0}
+              >
+                {skills.length === 0 && <option value={selectedSkillId}>{selectedSkillId}</option>}
+                {skills.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              {activeSkill && <span className="muted small">{activeSkill.description}</span>}
+            </label>
+
+            <div className="review-dialog-field">
+              <span className="muted small">Models</span>
+              <div className="panel-review-list">
+                {models.length === 0 && (
+                  <div className="muted small">No models available. Check Copilot in Settings.</div>
+                )}
+                {models.map((m) => {
+                  const already = reviewedModels.has(m.id)
+                  const checked = selectedModels.has(m.id)
+                  return (
+                    <label key={m.id} className="panel-review-item">
+                      <input type="checkbox" checked={checked} onChange={() => onToggleModel(m.id)} />
+                      <span className="panel-review-item-name">
+                        {m.name}
+                        {m.id === defaultModel ? ' (default)' : ''}
                       </span>
-                    )}
-                  </label>
-                )
-              })}
+                      {already && (
+                        <span
+                          className="panel-review-tag"
+                          title="This model has already reviewed this PR — running it again will re-check its own findings and re-consider new issues."
+                        >
+                          already reviewed
+                        </span>
+                      )}
+                    </label>
+                  )
+                })}
+              </div>
             </div>
+
             <div className="panel-review-actions">
-              <button className="btn subtle small-btn" onClick={() => setOpen(false)}>
+              <button className="btn subtle small-btn" onClick={onReset}>
+                Reset to default
+              </button>
+              <div className="spacer" />
+              <button className="btn subtle small-btn" onClick={onClose}>
                 Cancel
               </button>
               <button
@@ -775,7 +878,7 @@ function PanelReviewControl({
                 onClick={() => void onRun()}
                 disabled={count === 0}
               >
-                Run selected ({count})
+                {count > 1 ? `Run panel (${count})` : 'Run review'}
               </button>
             </div>
           </div>

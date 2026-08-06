@@ -16,9 +16,10 @@ export const IPC = {
   copilotDeviceCode: 'copilot:deviceCode',
   copilotLoginStatus: 'copilot:loginStatus',
 
-  // Agent instructions
-  agentGetInstructions: 'agent:getInstructions',
-  agentSaveInstructions: 'agent:saveInstructions',
+  // Skills
+  skillList: 'skill:list',
+  skillGetInstructions: 'skill:getInstructions',
+  skillSaveInstructions: 'skill:saveInstructions',
 
   // Pull requests
   prList: 'pr:list',
@@ -36,6 +37,8 @@ export const IPC = {
   prReview: 'pr:review',
   prReviewPanel: 'pr:reviewPanel',
   prExplainDescription: 'pr:explainDescription',
+  // main -> renderer progress event for the agentic "Explain this PR" action
+  prExplainProgress: 'pr:explainProgress',
   prExplainFileChange: 'pr:explainFileChange',
   prRefreshComments: 'pr:refreshComments',
   prGetAdoComments: 'pr:getAdoComments',

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CopilotModel, DeviceCodeInfo, Settings } from '../../../shared/types'
+import type { CopilotModel, DeviceCodeInfo, Settings, Skill } from '../../../shared/types'
 import type { ThemePref } from '../theme'
 
 interface Props {
@@ -21,6 +21,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [skills, setSkills] = useState<Skill[]>([])
+  const [selectedSkillId, setSelectedSkillId] = useState<string>('general')
   const [instructions, setInstructions] = useState('')
   const [defaultInstructions, setDefaultInstructions] = useState('')
   const [instructionsUsingDefault, setInstructionsUsingDefault] = useState(true)
@@ -55,11 +57,20 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   }, [settings?.copilotConnected])
 
   useEffect(() => {
-    void loadInstructions()
+    void loadSkills()
   }, [])
 
-  async function loadInstructions(): Promise<void> {
-    const res = await window.api.getAgentInstructions()
+  useEffect(() => {
+    void loadInstructions(selectedSkillId)
+  }, [selectedSkillId])
+
+  async function loadSkills(): Promise<void> {
+    const res = await window.api.listSkills()
+    if (res.ok) setSkills(res.data)
+  }
+
+  async function loadInstructions(skillId: string): Promise<void> {
+    const res = await window.api.getSkillInstructions(skillId)
     if (res.ok) {
       setInstructions(res.data.instructions)
       setDefaultInstructions(res.data.defaultInstructions)
@@ -70,24 +81,26 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   async function saveInstructions(): Promise<void> {
     setBusy(true)
     setError(null)
-    const res = await window.api.saveAgentInstructions(instructions)
+    const res = await window.api.saveSkillInstructions(selectedSkillId, instructions)
     setBusy(false)
     if (res.ok) {
       setInstructions(res.data.instructions)
       setInstructionsUsingDefault(res.data.isDefault)
-      setMessage('Agent instructions saved.')
+      const skillName = skills.find((s) => s.id === selectedSkillId)?.name ?? 'Skill'
+      setMessage(`${skillName} instructions saved.`)
     } else setError(res.error)
   }
 
   async function resetInstructions(): Promise<void> {
     setBusy(true)
     setError(null)
-    const res = await window.api.saveAgentInstructions('')
+    const res = await window.api.saveSkillInstructions(selectedSkillId, '')
     setBusy(false)
     if (res.ok) {
       setInstructions(res.data.instructions)
       setInstructionsUsingDefault(res.data.isDefault)
-      setMessage('Agent instructions reset to default.')
+      const skillName = skills.find((s) => s.id === selectedSkillId)?.name ?? 'Skill'
+      setMessage(`${skillName} instructions reset to default.`)
     } else setError(res.error)
   }
 
@@ -247,12 +260,31 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       </section>
 
       <section className="card">
-        <h2>Agent instructions</h2>
+        <h2>Review skills</h2>
         <p className="muted">
-          These instructions tell the review agent how to assess pull requests. The JSON
-          output format is fixed automatically, so you can edit freely.
+          A skill is a named prompt profile that shapes how the reviewer approaches a PR.
+          Pick a skill to edit its instructions — the JSON output format is fixed
+          automatically, so you can edit freely.
           {instructionsUsingDefault ? ' Currently using the default.' : ' Customized.'}
         </p>
+        <label>
+          Skill
+          <select
+            value={selectedSkillId}
+            onChange={(e) => setSelectedSkillId(e.target.value)}
+            disabled={skills.length === 0}
+          >
+            {skills.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(() => {
+          const active = skills.find((s) => s.id === selectedSkillId)
+          return active ? <p className="muted small">{active.description}</p> : null
+        })()}
         <textarea
           className="instructions"
           value={instructions}

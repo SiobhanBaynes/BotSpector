@@ -3,7 +3,6 @@ import { diffLines } from 'diff'
 import { IPC } from '../shared/ipc'
 import type {
   AdoCommentThread,
-  AgentInstructions,
   ChangedFile,
   ChatMessage,
   CodeSnippet,
@@ -20,7 +19,9 @@ import type {
   Review,
   ReviewStatus,
   ReviewSummary,
-  Settings
+  Settings,
+  Skill,
+  SkillInstructions
 } from '../shared/types'
 import { secrets } from './secrets'
 import * as repo from './db/repo'
@@ -50,7 +51,6 @@ import {
   postPullRequestComment
 } from './mcp/adoService'
 import {
-  DEFAULT_REVIEW_INSTRUCTIONS,
   assessFindingResolution,
   chatAboutPullRequest,
   draftComment,
@@ -62,6 +62,12 @@ import {
   refineComment,
   reviewPullRequest
 } from './agent/reviewer'
+import {
+  GENERAL_SKILL_ID,
+  getBuiltinSkill,
+  listBuiltinSkills,
+  skillOverrideSettingKey
+} from './agent/skills'
 import { openLogs, logger } from './logger'
 
 function ok<T>(data: T): IpcResult<T> {
@@ -230,32 +236,57 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  // ---- agent instructions ----
-  ipcMain.handle(IPC.agentGetInstructions, (): IpcResult<AgentInstructions> => {
-    const stored = repo.getSetting('reviewInstructions')
-    return ok({
-      instructions: stored || DEFAULT_REVIEW_INSTRUCTIONS,
-      isDefault: !stored,
-      defaultInstructions: DEFAULT_REVIEW_INSTRUCTIONS
-    })
+  // ---- skills ----
+
+  // A skill's default instructions (from the built-in definition) with the
+  // user's override — if any — spliced in. Kept in one place so both the
+  // read/write IPCs and the reviewer resolve skills identically.
+  function readSkillInstructions(skillId: string): SkillInstructions | null {
+    const skill = getBuiltinSkill(skillId)
+    if (!skill) return null
+    const override = repo.getSetting(skillOverrideSettingKey(skillId))
+    return {
+      skillId: skill.id,
+      instructions: override || skill.instructions,
+      isDefault: !override,
+      defaultInstructions: skill.instructions
+    }
+  }
+
+  ipcMain.handle(IPC.skillList, (): IpcResult<Skill[]> => {
+    try {
+      return ok(listBuiltinSkills())
+    } catch (e) {
+      return fail(e)
+    }
   })
 
   ipcMain.handle(
-    IPC.agentSaveInstructions,
-    (_e, instructions: string): IpcResult<AgentInstructions> => {
+    IPC.skillGetInstructions,
+    (_e, skillId: string): IpcResult<SkillInstructions> => {
       try {
-        // An empty value resets to the built-in default.
+        const res = readSkillInstructions(skillId)
+        if (!res) throw new Error(`Unknown skill: ${skillId}`)
+        return ok(res)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.skillSaveInstructions,
+    (_e, skillId: string, instructions: string): IpcResult<SkillInstructions> => {
+      try {
+        const skill = getBuiltinSkill(skillId)
+        if (!skill) throw new Error(`Unknown skill: ${skillId}`)
+        // An empty value (or the exact default) resets to the built-in default.
         const trimmed = (instructions ?? '').trim()
-        repo.setSetting(
-          'reviewInstructions',
-          trimmed === DEFAULT_REVIEW_INSTRUCTIONS.trim() ? '' : trimmed
-        )
-        const stored = repo.getSetting('reviewInstructions')
-        return ok({
-          instructions: stored || DEFAULT_REVIEW_INSTRUCTIONS,
-          isDefault: !stored,
-          defaultInstructions: DEFAULT_REVIEW_INSTRUCTIONS
-        })
+        const value = trimmed && trimmed !== skill.instructions.trim() ? trimmed : ''
+        repo.setSetting(skillOverrideSettingKey(skillId), value)
+        const res = readSkillInstructions(skillId)
+        if (!res) throw new Error(`Unknown skill: ${skillId}`)
+        return ok(res)
       } catch (e) {
         return fail(e)
       }
@@ -542,9 +573,14 @@ export function registerIpcHandlers(): void {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
-        if (!pr.description.trim()) return ok('This pull request has no description.')
         const model = resolveModel(modelArg)
-        return ok(await explainPullRequest(pr.description, model))
+        // Explain from the actual changes (diffs/files) via tools, using the
+        // description only as a hint — it may be missing, wrong, or out of date.
+        return ok(
+          await explainPullRequest(pr.adoPrId, model, pr.description, (message) =>
+            send(IPC.prExplainProgress, { prId, message })
+          )
+        )
       } catch (e) {
         return fail(e)
       }
@@ -765,11 +801,15 @@ export function registerIpcHandlers(): void {
     prId: number,
     model: string,
     headCommit: string,
+    skillId: string,
     onProgress: (message: string) => void
   ): Promise<void> {
     const pr = repo.getPullRequest(prId)
     if (!pr) throw new Error('Pull request not found')
-    const instructions = repo.getSetting('reviewInstructions') || undefined
+    const skill = getBuiltinSkill(skillId) ?? getBuiltinSkill(GENERAL_SKILL_ID)
+    if (!skill) throw new Error('No review skill available')
+    const override = repo.getSetting(skillOverrideSettingKey(skill.id))
+    const instructions = override || skill.instructions
     const { findings, additions, raw } = await reviewPullRequest(
       pr.adoPrId,
       model,
@@ -781,13 +821,14 @@ export function registerIpcHandlers(): void {
       // with a posted comment).
       (repo.getReviewForPr(prId)?.findings ?? []).filter(
         (f) => f.model !== model || f.comment?.status === 'posted'
-      )
+      ),
+      skill
     )
     repo.createReview(prId, model, findings, raw, headCommit)
     // Merge this model's contributions into other agents' existing findings.
     repo.applyContributions(prId, model, additions)
     logger.info(
-      `review pass completed for pr id ${prId} (${model}): ${findings.length} new finding(s), ${additions.length} contribution(s)`
+      `review pass completed for pr id ${prId} (${model}, skill=${skill.id}): ${findings.length} new finding(s), ${additions.length} contribution(s)`
     )
   }
 
@@ -811,11 +852,12 @@ export function registerIpcHandlers(): void {
     return headCommit
   }
 
-  ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string): Promise<IpcResult<Review>> => {
+  ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string, skillIdArg?: string): Promise<IpcResult<Review>> => {
     try {
       const pr = repo.getPullRequest(prId)
       if (!pr) throw new Error('Pull request not found')
       const model = resolveModel(modelArg)
+      const skillId = (skillIdArg ?? '').trim() || GENERAL_SKILL_ID
 
       // Capture the current status/conversation of previously posted comments
       // before this re-review replaces the old findings, so that history is kept.
@@ -829,10 +871,10 @@ export function registerIpcHandlers(): void {
 
       repo.setReviewStatus(prId, 'reviewing')
       send(IPC.prReviewProgress, { prId, message: 'Starting review…' })
-      logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}`)
+      logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}, skill ${skillId}`)
 
       const headCommit = await captureHeadCommit(prId)
-      await runReviewerPass(prId, model, headCommit, (message) =>
+      await runReviewerPass(prId, model, headCommit, skillId, (message) =>
         send(IPC.prReviewProgress, { prId, message })
       )
       // A fresh review has untriaged (open) findings, so this lands as
@@ -856,7 +898,7 @@ export function registerIpcHandlers(): void {
   // "+1" contributions and only genuinely new issues are added.
   ipcMain.handle(
     IPC.prReviewPanel,
-    async (_e, prId: number, modelsArg: string[]): Promise<IpcResult<Review>> => {
+    async (_e, prId: number, modelsArg: string[], skillIdArg?: string): Promise<IpcResult<Review>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
@@ -864,6 +906,7 @@ export function registerIpcHandlers(): void {
           ? Array.from(new Set(modelsArg.map((m) => (m ?? '').trim()).filter(Boolean)))
           : []
         if (models.length === 0) throw new Error('No reviewers selected.')
+        const skillId = (skillIdArg ?? '').trim() || GENERAL_SKILL_ID
 
         try {
           await syncCommentThreads(prId)
@@ -879,7 +922,7 @@ export function registerIpcHandlers(): void {
           message: `Starting panel review with ${models.length} reviewer${models.length === 1 ? '' : 's'}…`
         })
         logger.info(
-          `panel review started for pr id ${prId} (ADO #${pr.adoPrId}) with models: ${models.join(', ')}`
+          `panel review started for pr id ${prId} (ADO #${pr.adoPrId}) with models: ${models.join(', ')}, skill ${skillId}`
         )
 
         const headCommit = await captureHeadCommit(prId)
@@ -889,7 +932,7 @@ export function registerIpcHandlers(): void {
           const prefix = `Reviewer ${i + 1}/${models.length} · ${model}`
           send(IPC.prReviewProgress, { prId, message: `${prefix} · starting…` })
           try {
-            await runReviewerPass(prId, model, headCommit, (message) =>
+            await runReviewerPass(prId, model, headCommit, skillId, (message) =>
               send(IPC.prReviewProgress, { prId, message: `${prefix} · ${message}` })
             )
           } catch (e) {
