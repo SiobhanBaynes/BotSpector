@@ -23,6 +23,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [error, setError] = useState<string | null>(null)
   const [skills, setSkills] = useState<Skill[]>([])
   const [selectedSkillId, setSelectedSkillId] = useState<string>('general')
+  const [gitSpec, setGitSpec] = useState('')
   const [instructions, setInstructions] = useState('')
   const [defaultInstructions, setDefaultInstructions] = useState('')
   const [instructionsUsingDefault, setInstructionsUsingDefault] = useState(true)
@@ -101,6 +102,53 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       setInstructionsUsingDefault(res.data.isDefault)
       const skillName = skills.find((s) => s.id === selectedSkillId)?.name ?? 'Skill'
       setMessage(`${skillName} instructions reset to default.`)
+    } else setError(res.error)
+  }
+
+  async function importSkill(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    const res = await window.api.importSkill()
+    setBusy(false)
+    if (res.ok) {
+      await loadSkills()
+      setSelectedSkillId(res.data.id)
+      setMessage(`Imported skill “${res.data.name}”. Review its instructions before using it.`)
+    } else if (res.error !== 'Import cancelled.') {
+      setError(res.error)
+    }
+  }
+
+  async function importSkillFromGit(): Promise<void> {
+    const spec = gitSpec.trim()
+    if (!spec) return
+    setBusy(true)
+    setError(null)
+    const res = await window.api.importSkillFromGit(spec)
+    setBusy(false)
+    if (res.ok) {
+      setGitSpec('')
+      await loadSkills()
+      setSelectedSkillId(res.data.id)
+      setMessage(`Imported skill “${res.data.name}” from Git. Review its instructions before using it.`)
+    } else setError(res.error)
+  }
+
+  async function openSkillsFolder(): Promise<void> {
+    await window.api.openSkillsFolder()
+  }
+
+  async function removeSelectedSkill(): Promise<void> {
+    const skill = skills.find((s) => s.id === selectedSkillId)
+    if (!skill || skill.source !== 'user') return
+    setBusy(true)
+    setError(null)
+    const res = await window.api.removeSkill(selectedSkillId)
+    setBusy(false)
+    if (res.ok) {
+      setSkills(res.data)
+      setSelectedSkillId('general')
+      setMessage(`Removed skill “${skill.name}”.`)
     } else setError(res.error)
   }
 
@@ -267,6 +315,34 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
           automatically, so you can edit freely.
           {instructionsUsingDefault ? ' Currently using the default.' : ' Customized.'}
         </p>
+        <div className="row" style={{ marginBottom: 8 }}>
+          <button className="btn" onClick={importSkill} disabled={busy}>
+            Import skill…
+          </button>
+          <button className="btn" onClick={openSkillsFolder}>
+            Reveal skills folder
+          </button>
+          <span className="muted small">
+            Load an external SKILL.md folder (e.g. an Anthropic-style skill).
+          </span>
+        </div>
+        <div className="row" style={{ marginBottom: 8 }}>
+          <input
+            value={gitSpec}
+            onChange={(e) => setGitSpec(e.target.value)}
+            placeholder="https://github.com/org/repo#ref:path/to/skill"
+            style={{ flex: 1 }}
+            spellCheck={false}
+          />
+          <button className="btn" onClick={importSkillFromGit} disabled={busy || !gitSpec.trim()}>
+            Import from Git
+          </button>
+        </div>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Git import shallow-clones the repo, copies only its <code>SKILL.md</code>, and deletes the
+          clone — nothing from the repo is executed. Use <code>#ref</code> to pin a branch/tag and
+          <code>:subdir</code> to pick one skill from a monorepo.
+        </p>
         <label>
           Skill
           <select
@@ -277,13 +353,26 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
             {skills.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
+                {s.source === 'user' ? ' (imported)' : ''}
               </option>
             ))}
           </select>
         </label>
         {(() => {
           const active = skills.find((s) => s.id === selectedSkillId)
-          return active ? <p className="muted small">{active.description}</p> : null
+          if (!active) return null
+          return (
+            <>
+              <p className="muted small">{active.description}</p>
+              {active.source === 'user' && (
+                <p className="muted small">
+                  Imported skill{active.version ? ` · v${active.version}` : ''}. Its instructions
+                  are untrusted content and always run inside BotSpector’s read-only review
+                  guardrails.
+                </p>
+              )}
+            </>
+          )
         })()}
         <textarea
           className="instructions"
@@ -303,6 +392,11 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
           >
             Reset to default
           </button>
+          {skills.find((s) => s.id === selectedSkillId)?.source === 'user' && (
+            <button className="btn danger" onClick={removeSelectedSkill} disabled={busy}>
+              Remove skill
+            </button>
+          )}
         </div>
       </section>
 

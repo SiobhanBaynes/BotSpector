@@ -170,6 +170,15 @@ h1 {
 .btn.subtle {
   background: transparent;
 }
+.btn.danger {
+  border-color: var(--danger, #d1434b);
+  color: var(--danger, #d1434b);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--danger, #d1434b);
+  border-color: var(--danger, #d1434b);
+  color: #fff;
+}
 .btn:disabled {
   opacity: 0.5;
   cursor: default;

@@ -71,6 +71,12 @@ const api = {
     instructions: string
   ): Promise<IpcResult<SkillInstructions>> =>
     ipcRenderer.invoke(IPC.skillSaveInstructions, skillId, instructions),
+  importSkill: (): Promise<IpcResult<Skill>> => ipcRenderer.invoke(IPC.skillImport),
+  importSkillFromGit: (spec: string): Promise<IpcResult<Skill>> =>
+    ipcRenderer.invoke(IPC.skillImportGit, spec),
+  openSkillsFolder: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.skillOpenFolder),
+  removeSkill: (skillId: string): Promise<IpcResult<Skill[]>> =>
+    ipcRenderer.invoke(IPC.skillRemove, skillId),
 
   // pull requests
   listPullRequests: (): Promise<IpcResult<PullRequest[]>> => ipcRenderer.invoke(IPC.prList),
