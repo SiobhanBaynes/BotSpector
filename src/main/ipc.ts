@@ -32,7 +32,6 @@ import {
   fetchPullRequestDescription,
   fetchPullRequestSummary,
   fetchPullRequestHeadCommit,
-  fetchPullRequestMergeCommits,
   fetchPullRequestDiffRange,
   fetchPullRequestThreads,
   fetchPullRequestDetails,
@@ -650,9 +649,13 @@ export function registerIpcHandlers(): void {
         if (!pr) throw new Error('Pull request not found')
         const model = resolveModel(modelArg)
 
-        const commits = await fetchPullRequestMergeCommits(pr.adoPrId)
-        const head = commits?.source || pr.headCommit || undefined
-        const base = commits?.target || undefined
+        // Use the same commit range as the Files-tab diff view so the change we
+        // explain matches exactly what the user sees (the PR's own changes,
+        // base = merge-base). Using the raw merge commits here could pick a
+        // base where the file differs, making the whole file look "added".
+        const range = await fetchPullRequestDiffRange(pr.adoPrId)
+        const head = range.head || pr.headCommit || undefined
+        const base = range.base || undefined
         const after =
           (await fetchFileContent(path, { commit: head, branch: pr.sourceBranch }).catch(
             () => null
