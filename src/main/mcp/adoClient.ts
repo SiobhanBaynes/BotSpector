@@ -57,7 +57,11 @@ export async function ensureConnected(): Promise<Client> {
       command: getNpxCommand(),
       args: [
         '-y',
-        '@azure-devops/mcp',
+        // Pinned: `npx -y @azure-devops/mcp` is unpinned and auto-upgrades to the
+        // latest release. In 2.9.0 the server renamed/consolidated its tools,
+        // which broke our deterministic findTool() lookups. Pin to a known-good
+        // version and upgrade deliberately. See docs/TOOLSET.md upstream.
+        '@azure-devops/mcp@2.8.1',
         org,
         '-d',
         'core',

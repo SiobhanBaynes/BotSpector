@@ -208,6 +208,22 @@ export async function fetchPullRequestDetails(adoPrId: number): Promise<PrAdoDet
   return { status: data.status ?? 'active', isDraft: !!data.isDraft, reviewers, myVote, commentCount }
 }
 
+/**
+ * Fetch a PR's full raw object via the REST API (PAT auth). Returns null when
+ * REST isn't configured so callers can fall back to the MCP "get pull request"
+ * tool. Throws on a non-OK response so callers can distinguish "not configured"
+ * from "request failed".
+ */
+async function fetchPullRequestRest(adoPrId: number): Promise<AnyRecord | null> {
+  const cfg = restConfig()
+  if (!cfg) return null
+  const res = await fetch(`${prRestUrl(cfg, adoPrId)}?api-version=7.1`, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) throw new Error(`Could not load pull request (${res.status})`)
+  return (await res.json()) as AnyRecord
+}
+
 /** Add the current user as an optional (non-required) reviewer, if not already one. */
 export async function addSelfAsOptionalReviewer(adoPrId: number): Promise<void> {
   const cfg = restConfig()
@@ -548,8 +564,46 @@ export interface ThreadState {
   replies: ThreadReply[]
 }
 
+/** Map a raw comment-thread object (REST or MCP shape) into a ThreadState. */
+function mapThreadState(t: AnyRecord): ThreadState {
+  const comments = Array.isArray(t.comments) ? (t.comments as AnyRecord[]) : []
+  const realComments = comments.filter((c) => !c.isDeleted)
+  // Replies are every comment after the first (ours).
+  const replies: ThreadReply[] = realComments.slice(1).map((c) => {
+    const author = (c.author ?? {}) as AnyRecord
+    return {
+      author: str(author.displayName) || str(author.uniqueName) || 'Unknown',
+      text: str(c.content),
+      date: str(c.publishedDate || c.lastUpdatedDate) || null
+    }
+  })
+  return {
+    id: Number(t.id ?? 0),
+    status: typeof t.status === 'string' ? t.status : null,
+    commentCount: realComments.length,
+    replies
+  }
+}
+
 /** Fetch all comment threads for a PR, returning id, status, count, and replies. */
 export async function fetchPullRequestThreads(adoPrId: number): Promise<ThreadState[]> {
+  // Prefer REST (the /threads endpoint); fall back to the MCP tool only if REST
+  // isn't configured, so a renamed MCP tool can't break comment loading.
+  const cfg = restConfig()
+  if (cfg) {
+    try {
+      const res = await fetch(`${prRestUrl(cfg, adoPrId)}/threads?api-version=7.1`, {
+        headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+      })
+      if (res.ok) {
+        const data = (await res.json()) as { value?: AnyRecord[] }
+        return (data.value ?? []).map(mapThreadState)
+      }
+    } catch {
+      // fall through to the MCP tool
+    }
+  }
+
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
 
@@ -568,28 +622,7 @@ export async function fetchPullRequestThreads(adoPrId: number): Promise<ThreadSt
   })
 
   const text = await callTool(tool.name, args)
-  const parsed = parseJsonFromText(text)
-  const rows = asArray(parsed)
-
-  return rows.map((t) => {
-    const comments = Array.isArray(t.comments) ? (t.comments as AnyRecord[]) : []
-    const realComments = comments.filter((c) => !c.isDeleted)
-    // Replies are every comment after the first (ours).
-    const replies: ThreadReply[] = realComments.slice(1).map((c) => {
-      const author = (c.author ?? {}) as AnyRecord
-      return {
-        author: str(author.displayName) || str(author.uniqueName) || 'Unknown',
-        text: str(c.content),
-        date: str(c.publishedDate || c.lastUpdatedDate) || null
-      }
-    })
-    return {
-      id: Number(t.id ?? 0),
-      status: typeof t.status === 'string' ? t.status : null,
-      commentCount: realComments.length,
-      replies
-    }
-  })
+  return asArray(parseJsonFromText(text)).map(mapThreadState)
 }
 
 /**
@@ -825,6 +858,50 @@ export async function postPullRequestComment(
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
 
+  // Prefer REST so posting comments works regardless of MCP tool renames. The
+  // REST /threads endpoint creates a new thread; anchor it to a file/line when
+  // given, and retry unanchored if the file context is rejected.
+  const cfg = restConfig()
+  if (cfg) {
+    const postThread = async (body: AnyRecord): Promise<number | null | 'error'> => {
+      const res = await fetch(`${prRestUrl(cfg, adoPrId)}/threads?api-version=7.1`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${cfg.auth}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify(body)
+      })
+      if (!res.ok) return 'error'
+      const created = (await res.json().catch(() => null)) as AnyRecord | null
+      const threadId = created?.id
+      return typeof threadId === 'number' ? threadId : null
+    }
+    try {
+      const base: AnyRecord = {
+        comments: [{ parentCommentId: 0, content, commentType: 'text' }],
+        status: 'active'
+      }
+      if (filePath && line && line > 0) {
+        const anchored: AnyRecord = {
+          ...base,
+          threadContext: {
+            filePath: filePath.startsWith('/') ? filePath : `/${filePath}`,
+            rightFileStart: { line, offset: 1 },
+            rightFileEnd: { line, offset: 1 }
+          }
+        }
+        const r = await postThread(anchored)
+        if (r !== 'error') return r
+      }
+      const r2 = await postThread(base)
+      if (r2 !== 'error') return r2
+    } catch {
+      // fall through to the MCP tool
+    }
+  }
+
   const tool =
     (await findTool('pull_request', 'thread', 'create')) ??
     (await findTool('create', 'pull_request', 'thread')) ??
@@ -936,6 +1013,19 @@ export async function fetchPullRequestSummary(
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
 
+  // Prefer REST; fall back to the MCP get tool only if REST isn't configured.
+  const prObj = await fetchPullRequestRest(adoPrId).catch(() => null)
+  if (prObj) {
+    return {
+      title: typeof prObj.title === 'string' ? prObj.title : '',
+      description: typeof prObj.description === 'string' ? prObj.description : '',
+      sourceBranch: shortBranch(prObj.sourceRefName),
+      targetBranch: shortBranch(prObj.targetRefName),
+      status: typeof prObj.status === 'string' ? prObj.status : 'active',
+      isDraft: !!prObj.isDraft
+    }
+  }
+
   const getTool =
     (await findTool('pull_request', 'get')) ??
     (await findTool('get', 'pull_request')) ??
@@ -988,6 +1078,17 @@ export async function fetchPullRequestMergeCommits(
 ): Promise<{ source: string | null; target: string | null } | null> {
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
+
+  // Prefer REST; fall back to the MCP get tool only if REST isn't configured.
+  const prObj = await fetchPullRequestRest(adoPrId).catch(() => null)
+  if (prObj) {
+    const source = (prObj.lastMergeSourceCommit ?? {}) as AnyRecord
+    const target = (prObj.lastMergeTargetCommit ?? {}) as AnyRecord
+    return {
+      source: typeof source.commitId === 'string' ? source.commitId : null,
+      target: typeof target.commitId === 'string' ? target.commitId : null
+    }
+  }
 
   const getTool =
     (await findTool('pull_request', 'get')) ??
@@ -1053,40 +1154,45 @@ export async function getPullRequestContext(adoPrId: number): Promise<PrContext>
       `Do not fetch the entire PR diff at once.`
   )
 
-  // Concise PR metadata parsed from the get tool (not the raw JSON dump).
-  const getTool =
-    (await findTool('pull_request', 'get')) ??
-    (await findTool('get', 'pull_request')) ??
-    (await findTool('pullrequest', 'get'))
-  if (getTool) {
-    try {
-      const args = buildArgs(getTool, {
-        project,
-        repositoryId: repo,
-        repository: repo,
-        repositoryNameOrId: repo,
-        pullRequestId: adoPrId,
-        pullRequestId_: adoPrId
-      })
-      const text = await callTool(getTool.name, args)
-      const parsed = parseJsonFromText(text)
-      const pr = (Array.isArray(parsed) ? parsed[0] : parsed) as AnyRecord | undefined
-      if (pr && (pr.title || pr.description)) {
-        const description = str(pr.description)
-        parts.push(
-          `## Pull request #${adoPrId}\n` +
-            `Title: ${str(pr.title)}\n` +
-            `Status: ${str(pr.status) || 'active'}\n` +
-            `Branch: ${shortBranch(pr.sourceRefName)} -> ${shortBranch(pr.targetRefName)}\n\n` +
-            `Description:\n${description.slice(0, MAX_DESCRIPTION_CHARS) || '(none)'}`
-        )
-      } else {
-        // Fallback: unknown shape — include a truncated slice of the raw text.
-        parts.push('## Pull request details\n' + text.slice(0, MAX_DESCRIPTION_CHARS))
+  // Concise PR metadata. Prefer REST; fall back to the MCP get tool only if
+  // REST isn't configured, so a renamed MCP tool can't strip the seed context.
+  let pr: AnyRecord | undefined = (await fetchPullRequestRest(adoPrId).catch(() => null)) ?? undefined
+  let rawGetText = ''
+  if (!pr) {
+    const getTool =
+      (await findTool('pull_request', 'get')) ??
+      (await findTool('get', 'pull_request')) ??
+      (await findTool('pullrequest', 'get'))
+    if (getTool) {
+      try {
+        const args = buildArgs(getTool, {
+          project,
+          repositoryId: repo,
+          repository: repo,
+          repositoryNameOrId: repo,
+          pullRequestId: adoPrId,
+          pullRequestId_: adoPrId
+        })
+        rawGetText = await callTool(getTool.name, args)
+        const parsed = parseJsonFromText(rawGetText)
+        pr = (Array.isArray(parsed) ? parsed[0] : parsed) as AnyRecord | undefined
+      } catch (e) {
+        parts.push(`(Could not fetch PR details: ${(e as Error).message})`)
       }
-    } catch (e) {
-      parts.push(`(Could not fetch PR details: ${(e as Error).message})`)
     }
+  }
+  if (pr && (pr.title || pr.description)) {
+    const description = str(pr.description)
+    parts.push(
+      `## Pull request #${adoPrId}\n` +
+        `Title: ${str(pr.title)}\n` +
+        `Status: ${str(pr.status) || 'active'}\n` +
+        `Branch: ${shortBranch(pr.sourceRefName)} -> ${shortBranch(pr.targetRefName)}\n\n` +
+        `Description:\n${description.slice(0, MAX_DESCRIPTION_CHARS) || '(none)'}`
+    )
+  } else if (rawGetText) {
+    // Unknown MCP shape — include a truncated slice of the raw text.
+    parts.push('## Pull request details\n' + rawGetText.slice(0, MAX_DESCRIPTION_CHARS))
   }
 
   // A list of changed files (paths + change type) rather than full diffs. The
