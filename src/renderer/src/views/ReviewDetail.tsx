@@ -186,12 +186,25 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   }, [prId, load])
 
   async function runReviewFromDialog(): Promise<void> {
-    const chosen = Array.from(dialogModels)
+    await runReview(Array.from(dialogModels), selectedSkillId)
+  }
+
+  // Run a review directly with the default model (the split button's main
+  // action) — no dialog. Uses the remembered/selected skill.
+  async function runDefaultReview(): Promise<void> {
+    const model = defaultModel || models[0]?.id
+    if (!model) return
+    await runReview([model], selectedSkillId)
+  }
+
+  // Shared review execution used by both the split button's main action and the
+  // options dialog. `chosen` with more than one model runs a panel review.
+  async function runReview(chosen: string[], skillId: string): Promise<void> {
     if (chosen.length === 0) return
     // Remember this choice so it carries across PRs (reset restores defaults).
     try {
       localStorage.setItem(REVIEW_MODELS_KEY, JSON.stringify(chosen))
-      localStorage.setItem(REVIEW_SKILL_KEY, selectedSkillId)
+      localStorage.setItem(REVIEW_SKILL_KEY, skillId)
     } catch {
       // ignore storage failures
     }
@@ -205,8 +218,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         : 'Starting…'
     )
     const res = isPanel
-      ? await window.api.reviewPullRequestPanel(prId, chosen, selectedSkillId)
-      : await window.api.reviewPullRequest(prId, chosen[0], selectedSkillId)
+      ? await window.api.reviewPullRequestPanel(prId, chosen, skillId)
+      : await window.api.reviewPullRequest(prId, chosen[0], skillId)
     setReviewing(false)
     setProgress('')
     if (res.ok) setReview(res.data)
@@ -418,6 +431,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
           hasReview={!!review}
           isReviewing={isReviewing}
           onRun={runReviewFromDialog}
+          onRunDefault={runDefaultReview}
           onReset={resetReviewDialog}
         />
       </div>
@@ -767,6 +781,7 @@ function ReviewDialog({
   hasReview,
   isReviewing,
   onRun,
+  onRunDefault,
   onReset
 }: {
   open: boolean
@@ -783,28 +798,45 @@ function ReviewDialog({
   hasReview: boolean
   isReviewing: boolean
   onRun: () => Promise<void> | void
+  onRunDefault: () => Promise<void> | void
   onReset: () => void
 }): JSX.Element {
   const count = selectedModels.size
   const activeSkill = skills.find((s) => s.id === selectedSkillId)
+  const noModels = models.length === 0
   return (
     <div className="panel-review-control">
-      <button
-        className="btn primary"
-        onClick={onOpen}
-        disabled={isReviewing}
-        title="Choose a skill and one or more models, then run the review."
-      >
-        {isReviewing ? (
-          <>
-            <span className="spinner" /> Reviewing…
-          </>
-        ) : hasReview ? (
-          'Re-review…'
-        ) : (
-          'Review this PR'
-        )}
-      </button>
+      {/* Split button: the main action runs a review with the default model;
+          the arrow opens the dialog to change the skill or models. */}
+      <div className="split-button">
+        <button
+          className="btn primary split-main"
+          onClick={() => void onRunDefault()}
+          disabled={isReviewing || noModels}
+          title="Review with the default model. Use the arrow to choose a skill or other models."
+        >
+          {isReviewing ? (
+            <>
+              <span className="spinner" /> Reviewing…
+            </>
+          ) : hasReview ? (
+            'Re-review'
+          ) : (
+            'Review this PR'
+          )}
+        </button>
+        <button
+          className="btn primary split-arrow"
+          onClick={onOpen}
+          disabled={isReviewing || noModels}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Change review options"
+          title="Choose a skill and one or more models"
+        >
+          <span aria-hidden="true">▾</span>
+        </button>
+      </div>
       {open && (
         <>
           <div className="panel-review-scrim" onClick={onClose} />

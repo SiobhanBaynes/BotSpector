@@ -1563,6 +1563,25 @@ a {
   position: relative;
   display: inline-flex;
 }
+/* Split button: a primary action plus an attached dropdown-arrow trigger. */
+.split-button {
+  display: inline-flex;
+  align-items: stretch;
+}
+.split-button .split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.split-button .split-arrow {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-color: rgba(255, 255, 255, 0.35);
+  padding-left: 8px;
+  padding-right: 8px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+}
 .panel-review-scrim {
   position: fixed;
   inset: 0;
