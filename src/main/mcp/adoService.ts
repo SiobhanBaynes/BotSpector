@@ -411,6 +411,78 @@ export async function fetchChangedFiles(
   return files
 }
 
+// The subset of PullRequest fields the list view provides; the rest are filled
+// in later from the local DB and comment counts.
+type PrListItem = Omit<
+  PullRequest,
+  | 'id'
+  | 'reviewStatus'
+  | 'reviewedCommit'
+  | 'postedComments'
+  | 'unaddressedComments'
+  | 'commentReplies'
+  | 'commentCount'
+  | 'unresolvedCommentCount'
+  | 'myVote'
+>
+
+// Map a raw Azure DevOps pull-request object (the REST and MCP shapes match)
+// into our list item.
+function mapPullRequestRow(
+  r: AnyRecord,
+  org: string,
+  project: string,
+  repo: string
+): PrListItem {
+  const prId = Number(r.pullRequestId ?? r.id ?? 0)
+  const createdBy = (r.createdBy ?? {}) as AnyRecord
+  const repository = (r.repository ?? {}) as AnyRecord
+  const repoName = str(repository.name) || repo
+  const lastMergeSourceCommit = (r.lastMergeSourceCommit ?? {}) as AnyRecord
+  const reviewers = Array.isArray(r.reviewers) ? (r.reviewers as AnyRecord[]) : []
+  const approvals = reviewers.filter((rv) => Number(rv.vote) >= 5).length
+  const reviewerCount = reviewers.filter((rv) => Number(rv.vote) !== 0).length
+  return {
+    adoPrId: prId,
+    repo: repoName,
+    title: str(r.title) || `PR ${prId}`,
+    description: str(r.description),
+    author: str(createdBy.displayName) || str(createdBy.uniqueName) || 'Unknown',
+    status: str(r.status) || 'active',
+    url: webUrl(org, project, repoName, prId),
+    sourceBranch: shortBranch(r.sourceRefName),
+    targetBranch: shortBranch(r.targetRefName),
+    headCommit: str(lastMergeSourceCommit.commitId),
+    isDraft: Boolean(r.isDraft),
+    approvals,
+    reviewerCount,
+    updatedAt: str(r.creationDate) || new Date().toISOString()
+  }
+}
+
+// List active pull requests via the Azure DevOps REST API (PAT auth). Returns
+// null when REST isn't configured (no PAT/org/repo) so the caller can fall back
+// to the MCP tool.
+async function listPullRequestsRest(): Promise<PrListItem[] | null> {
+  const cfg = restConfig()
+  if (!cfg) return null
+
+  const params = new URLSearchParams({
+    'searchCriteria.status': 'active',
+    $top: '50',
+    'api-version': '7.1'
+  })
+  const url =
+    `https://dev.azure.com/${cfg.org}/${encodeURIComponent(cfg.project)}/_apis/git/repositories/` +
+    `${encodeURIComponent(cfg.repo)}/pullrequests?${params.toString()}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
+  })
+  if (!res.ok) throw new Error(`Could not list pull requests (${res.status})`)
+  const data = (await res.json()) as { value?: AnyRecord[] }
+  return (data.value ?? []).map((r) => mapPullRequestRow(r, cfg.org, cfg.project, cfg.repo))
+}
+
 export async function listPullRequests(): Promise<
   Array<
     Omit<
@@ -427,10 +499,15 @@ export async function listPullRequests(): Promise<
     >
   >
 > {
-  const org = getSetting('adoOrg')
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
   if (!repo) throw new Error('Azure DevOps repository is not set')
+
+  // Prefer the REST API (honours the PAT and is always available) and fall back
+  // to an MCP tool only if REST isn't configured. The MCP server doesn't always
+  // expose a pull-request-list tool, which previously broke the whole queue.
+  const rows = await listPullRequestsRest().catch(() => null)
+  if (rows) return rows
 
   const tool =
     (await findTool('pull_request', 'list')) ??
@@ -448,36 +525,10 @@ export async function listPullRequests(): Promise<
     top: 50
   })
 
+  const org = getSetting('adoOrg')
   const text = await callTool(tool.name, args)
   const parsed = parseJsonFromText(text)
-  const rows = asArray(parsed)
-
-  return rows.map((r) => {
-    const prId = Number(r.pullRequestId ?? r.id ?? 0)
-    const createdBy = (r.createdBy ?? {}) as AnyRecord
-    const repository = (r.repository ?? {}) as AnyRecord
-    const repoName = str(repository.name) || repo
-    const lastMergeSourceCommit = (r.lastMergeSourceCommit ?? {}) as AnyRecord
-    const reviewers = Array.isArray(r.reviewers) ? (r.reviewers as AnyRecord[]) : []
-    const approvals = reviewers.filter((rv) => Number(rv.vote) >= 5).length
-    const reviewerCount = reviewers.filter((rv) => Number(rv.vote) !== 0).length
-    return {
-      adoPrId: prId,
-      repo: repoName,
-      title: str(r.title) || `PR ${prId}`,
-      description: str(r.description),
-      author: str(createdBy.displayName) || str(createdBy.uniqueName) || 'Unknown',
-      status: str(r.status) || 'active',
-      url: webUrl(org, project, repoName, prId),
-      sourceBranch: shortBranch(r.sourceRefName),
-      targetBranch: shortBranch(r.targetRefName),
-      headCommit: str(lastMergeSourceCommit.commitId),
-      isDraft: Boolean(r.isDraft),
-      approvals,
-      reviewerCount,
-      updatedAt: str(r.creationDate) || new Date().toISOString()
-    }
-  })
+  return asArray(parsed).map((r) => mapPullRequestRow(r, org, project, repo))
 }
 
 export interface PrContext {
