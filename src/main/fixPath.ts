@@ -32,11 +32,10 @@ export function fixEnvPath(): void {
   const shell = process.env.SHELL || '/bin/zsh'
   let shellPath = ''
   try {
-    const out = execFileSync(
-      shell,
-      ['-ilc', `echo ${marker}; echo -n "$PATH"; echo ${marker}`],
-      { encoding: 'utf8', timeout: 5000 }
-    )
+    const out = execFileSync(shell, ['-ilc', `echo ${marker}; echo -n "$PATH"; echo ${marker}`], {
+      encoding: 'utf8',
+      timeout: 5000
+    })
     const between = out.split(marker)[1]
     if (between) shellPath = between.trim()
   } catch {

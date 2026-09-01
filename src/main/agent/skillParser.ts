@@ -102,7 +102,11 @@ export function parseGitSpec(spec: string): GitSpec {
       ref = rest
     } else {
       ref = rest.slice(0, colon).trim() || undefined
-      subdir = rest.slice(colon + 1).trim().replace(/^\/+|\/+$/g, '') || undefined
+      subdir =
+        rest
+          .slice(colon + 1)
+          .trim()
+          .replace(/^\/+|\/+$/g, '') || undefined
     }
   }
   return { url, ref, subdir }

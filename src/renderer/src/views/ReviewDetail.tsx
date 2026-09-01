@@ -118,9 +118,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     if (reviewRes.ok) {
       setReview(reviewRes.data)
       // If any comments were posted, refresh their thread status in the background.
-      const hasPosted = reviewRes.data?.findings.some(
-        (f) => f.comment?.adoThreadId != null
-      )
+      const hasPosted = reviewRes.data?.findings.some((f) => f.comment?.adoThreadId != null)
       if (hasPosted) {
         const refreshed = await window.api.refreshComments(prId)
         if (refreshed.ok && refreshed.data) setReview(refreshed.data)
@@ -208,11 +206,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
 
   // Shared review execution used by both the split button's main action and the
   // options dialog. `chosen` with more than one model runs a panel review.
-  async function runReview(
-    chosen: string[],
-    skillId: string,
-    depth: ReviewDepth
-  ): Promise<void> {
+  async function runReview(chosen: string[], skillId: string, depth: ReviewDepth): Promise<void> {
     if (chosen.length === 0) return
     // Remember this choice so it carries across PRs (reset restores defaults).
     try {
@@ -364,10 +358,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   }))
 
   const stale =
-    !!review &&
-    !!pr?.reviewedCommit &&
-    !!pr?.headCommit &&
-    pr.reviewedCommit !== pr.headCommit
+    !!review && !!pr?.reviewedCommit && !!pr?.headCommit && pr.reviewedCommit !== pr.headCommit
 
   // Comments we posted in earlier reviews whose finding is no longer part of the
   // current review (e.g. after a re-review). These would otherwise be invisible,
@@ -409,21 +400,25 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             <select
               className="status-select"
               value={
-                pr && ['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus)
+                pr &&
+                ['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus)
                   ? pr.reviewStatus
                   : ''
               }
               onChange={(e) => void changeStatus(e.target.value as ReviewStatus)}
             >
-              {pr && !['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus) && (
-                <option value="" disabled>
-                  {pr.reviewStatus === 'error'
-                    ? 'Error'
-                    : pr.reviewStatus === 'review_pending'
-                      ? 'Review pending'
-                      : '—'}
-                </option>
-              )}
+              {pr &&
+                !['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(
+                  pr.reviewStatus
+                ) && (
+                  <option value="" disabled>
+                    {pr.reviewStatus === 'error'
+                      ? 'Error'
+                      : pr.reviewStatus === 'review_pending'
+                        ? 'Review pending'
+                        : '—'}
+                  </option>
+                )}
               <option value="not_reviewed">Not reviewed</option>
               <option value="in_progress">In progress</option>
               <option value="reviewed">Reviewed</option>
@@ -457,8 +452,10 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
       {stale && (
         <div className="banner warn">
           New commits have been pushed since this review
-          {pr?.reviewedCommit ? ` (reviewed ${pr.reviewedCommit.slice(0, 8)}, now ${pr.headCommit.slice(0, 8)})` : ''}.
-          Consider re-reviewing.
+          {pr?.reviewedCommit
+            ? ` (reviewed ${pr.reviewedCommit.slice(0, 8)}, now ${pr.headCommit.slice(0, 8)})`
+            : ''}
+          . Consider re-reviewing.
         </div>
       )}
 
@@ -570,10 +567,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         >
           Review{total > 0 ? ` (${total})` : ''}
         </button>
-        <button
-          className={tab === 'files' ? 'tab active' : 'tab'}
-          onClick={() => setTab('files')}
-        >
+        <button className={tab === 'files' ? 'tab active' : 'tab'} onClick={() => setTab('files')}>
           Files
         </button>
         <button
@@ -582,10 +576,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         >
           Comments
         </button>
-        <button
-          className={tab === 'chat' ? 'tab active' : 'tab'}
-          onClick={() => setTab('chat')}
-        >
+        <button className={tab === 'chat' ? 'tab active' : 'tab'} onClick={() => setTab('chat')}>
           Chat
         </button>
       </div>
@@ -600,7 +591,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
 
       {/* Files tab stays mounted so it prefetches diffs in the background. */}
       <div style={{ display: tab === 'files' ? 'block' : 'none' }}>
-        <FilesTab prId={prId} model={defaultModel} request={fileRequest} onChatAbout={chatAboutChange} />
+        <FilesTab
+          prId={prId}
+          model={defaultModel}
+          request={fileRequest}
+          onChatAbout={chatAboutChange}
+        />
       </div>
 
       {tab === 'comments' && (
@@ -623,13 +619,14 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         />
       </div>
 
-      {tab === 'review' && priorComments.length > 0 && (
-        <PriorComments comments={priorComments} />
-      )}
+      {tab === 'review' && priorComments.length > 0 && <PriorComments comments={priorComments} />}
 
       {tab === 'review' && !review && !isReviewing && (
         <div className="empty">
-          <p>BotSpector hasn’t snooped through this PR yet. Hit “Review this PR” and let me dig in. 🕵️</p>
+          <p>
+            BotSpector hasn’t snooped through this PR yet. Hit “Review this PR” and let me dig in.
+            🕵️
+          </p>
         </div>
       )}
 
@@ -652,11 +649,36 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
           )}
 
           <div className="filter-bar">
-            <FilterChip label="All" count={total} active={filter === 'all'} onClick={() => setFilter('all')} />
-            <FilterChip label="Open" count={counts.open} active={filter === 'open'} onClick={() => setFilter('open')} />
-            <FilterChip label="Accepted" count={counts.accepted} active={filter === 'accepted'} onClick={() => setFilter('accepted')} />
-            <FilterChip label="Dismissed" count={counts.dismissed} active={filter === 'dismissed'} onClick={() => setFilter('dismissed')} />
-            <FilterChip label="Posted" count={counts.posted} active={filter === 'posted'} onClick={() => setFilter('posted')} />
+            <FilterChip
+              label="All"
+              count={total}
+              active={filter === 'all'}
+              onClick={() => setFilter('all')}
+            />
+            <FilterChip
+              label="Open"
+              count={counts.open}
+              active={filter === 'open'}
+              onClick={() => setFilter('open')}
+            />
+            <FilterChip
+              label="Accepted"
+              count={counts.accepted}
+              active={filter === 'accepted'}
+              onClick={() => setFilter('accepted')}
+            />
+            <FilterChip
+              label="Dismissed"
+              count={counts.dismissed}
+              active={filter === 'dismissed'}
+              onClick={() => setFilter('dismissed')}
+            />
+            <FilterChip
+              label="Posted"
+              count={counts.posted}
+              active={filter === 'posted'}
+              onClick={() => setFilter('posted')}
+            />
           </div>
 
           {findingsByBucket.map(({ bucket, items }) =>
@@ -679,10 +701,10 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
             )
           )}
 
-          {total === 0 && <div className="empty">Squeaky clean — BotSpector found nothing to nitpick. ✨</div>}
-          {total > 0 && visible.length === 0 && (
-            <div className="empty">No {filter} findings.</div>
+          {total === 0 && (
+            <div className="empty">Squeaky clean — BotSpector found nothing to nitpick. ✨</div>
           )}
+          {total > 0 && visible.length === 0 && <div className="empty">No {filter} findings.</div>}
         </>
       )}
     </div>
@@ -995,7 +1017,11 @@ function ReviewDialog({
                   const checked = selectedModels.has(m.id)
                   return (
                     <label key={m.id} className="panel-review-item">
-                      <input type="checkbox" checked={checked} onChange={() => onToggleModel(m.id)} />
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onToggleModel(m.id)}
+                      />
                       <span className="panel-review-item-name">
                         {m.name}
                         {m.id === defaultModel ? ' (default)' : ''}
@@ -1088,7 +1114,9 @@ function PriorComments({ comments }: { comments: PostedComment[] }): JSX.Element
           <div className="prior-comment-head">
             {c.findingPublicId && <span className="mono">{c.findingPublicId}</span>}
             {c.bucket && (
-              <span className={`review-badge bucket-tag-${c.bucket.toLowerCase()}`}>{c.bucket}</span>
+              <span className={`review-badge bucket-tag-${c.bucket.toLowerCase()}`}>
+                {c.bucket}
+              </span>
             )}
             {c.findingTitle && <span className="prior-comment-title">{c.findingTitle}</span>}
             <span className={`thread-pill ${threadStateClass(c.threadStatus)}`}>
@@ -1102,7 +1130,9 @@ function PriorComments({ comments }: { comments: PostedComment[] }): JSX.Element
                 <div key={i} className="reply">
                   <div className="reply-head small">
                     <span className="reply-author">{r.author}</span>
-                    {r.date && <span className="muted"> · {new Date(r.date).toLocaleString()}</span>}
+                    {r.date && (
+                      <span className="muted"> · {new Date(r.date).toLocaleString()}</span>
+                    )}
                   </div>
                   <div className="reply-text">{r.text}</div>
                 </div>

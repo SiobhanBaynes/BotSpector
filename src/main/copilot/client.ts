@@ -253,7 +253,7 @@ async function callResponses(opts: CompleteOptions): Promise<CompletionResult> {
       }
     }
   }
-  const content = textParts.length > 0 ? textParts.join('') : data.output_text ?? null
+  const content = textParts.length > 0 ? textParts.join('') : (data.output_text ?? null)
   return { content, toolCalls }
 }
 
@@ -294,8 +294,7 @@ export async function listModels(): Promise<CopilotModel[]> {
     const vendor = (m.vendor ?? '').toLowerCase()
     const lid = id.toLowerCase()
     const isClaude = vendor.includes('anthropic') || lid.includes('claude')
-    const isGpt =
-      vendor.includes('openai') || lid.includes('gpt') || /^o\d/.test(lid)
+    const isGpt = vendor.includes('openai') || lid.includes('gpt') || /^o\d/.test(lid)
     if (!isClaude && !isGpt) continue
 
     seen.add(id)

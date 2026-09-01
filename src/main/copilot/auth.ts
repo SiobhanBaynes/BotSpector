@@ -81,7 +81,6 @@ export async function pollForToken(intervalSeconds: number): Promise<void> {
   if (!activeDeviceCode) throw new Error('No active device login')
   let interval = Math.max(intervalSeconds, 1) * 1000
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     if (cancelRequested) throw new Error('Login cancelled')
     await sleep(interval)

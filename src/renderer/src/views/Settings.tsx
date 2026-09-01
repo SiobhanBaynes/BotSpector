@@ -54,7 +54,6 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
   useEffect(() => {
     if (settings?.copilotConnected) void loadModels()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.copilotConnected])
 
   useEffect(() => {
@@ -130,7 +129,9 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       setGitSpec('')
       await loadSkills()
       setSelectedSkillId(res.data.id)
-      setMessage(`Imported skill “${res.data.name}” from Git. Review its instructions before using it.`)
+      setMessage(
+        `Imported skill “${res.data.name}” from Git. Review its instructions before using it.`
+      )
     } else setError(res.error)
   }
 
@@ -310,9 +311,9 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       <section className="card">
         <h2>Review skills</h2>
         <p className="muted">
-          A skill is a named prompt profile that shapes how the reviewer approaches a PR.
-          Pick a skill to edit its instructions — the JSON output format is fixed
-          automatically, so you can edit freely.
+          A skill is a named prompt profile that shapes how the reviewer approaches a PR. Pick a
+          skill to edit its instructions — the JSON output format is fixed automatically, so you can
+          edit freely.
           {instructionsUsingDefault ? ' Currently using the default.' : ' Customized.'}
         </p>
         <div className="row" style={{ marginBottom: 8 }}>
@@ -430,8 +431,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       <section className="card">
         <h2>Your identity</h2>
         <p className="muted">
-          Used to mark and filter your own pull requests. Detect it from Azure DevOps or
-          type your display name.
+          Used to mark and filter your own pull requests. Detect it from Azure DevOps or type your
+          display name.
         </p>
         <label>
           Your name

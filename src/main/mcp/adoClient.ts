@@ -21,7 +21,6 @@ export type { McpTool } from './toolUtils'
  */
 
 let client: Client | null = null
-let transport: StdioClientTransport | null = null
 let cachedTools: McpTool[] | null = null
 let connectKey = '' // org + pat fingerprint, so we reconnect when settings change
 let connecting: Promise<Client> | null = null // in-flight connection (mutex)
@@ -81,7 +80,6 @@ export async function ensureConnected(): Promise<Client> {
 
     const c = new Client({ name: 'botspector', version: '0.1.0' }, { capabilities: {} })
     await c.connect(t)
-    transport = t
     client = c
     connectKey = key
     cachedTools = null
@@ -102,7 +100,6 @@ export async function disconnect(): Promise<void> {
     // ignore
   }
   client = null
-  transport = null
   cachedTools = null
   connectKey = ''
 }
@@ -134,10 +131,7 @@ export async function listTools(): Promise<McpTool[]> {
 }
 
 /** Call a tool and return its text content concatenated. */
-export async function callTool(
-  name: string,
-  args: Record<string, unknown>
-): Promise<string> {
+export async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const invoke = async (): Promise<string> => {
     const c = await ensureConnected()
     const res = await c.callTool({ name, arguments: args })
@@ -164,15 +158,10 @@ export async function callTool(
 /** Find the first tool whose name matches all of the given substrings. */
 export async function findTool(...substrings: string[]): Promise<McpTool | null> {
   const tools = await listTools()
-  return (
-    tools.find((t) => substrings.every((s) => t.name.toLowerCase().includes(s))) ?? null
-  )
+  return tools.find((t) => substrings.every((s) => t.name.toLowerCase().includes(s))) ?? null
 }
 
-export function buildArgs(
-  tool: McpTool,
-  values: Record<string, unknown>
-): Record<string, unknown> {
+export function buildArgs(tool: McpTool, values: Record<string, unknown>): Record<string, unknown> {
   return buildToolArgs(tool, values)
 }
 

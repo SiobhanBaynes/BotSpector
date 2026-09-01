@@ -519,7 +519,8 @@ a {
   gap: 8px;
   flex-wrap: wrap;
   margin: 4px 0 12px;
-}.filter-chip {
+}
+.filter-chip {
   display: inline-flex;
   align-items: center;
   padding: 3px 10px;
@@ -1774,4 +1775,3 @@ a {
 .panel-review-actions .spacer {
   flex: 1;
 }
-

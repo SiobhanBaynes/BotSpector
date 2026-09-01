@@ -8,51 +8,162 @@ trigger:
     include:
       - main
 
-pool:
-  vmImage: ubuntu-latest
-
 variables:
   npm_config_cache: $(Pipeline.Workspace)/.npm
 
-steps:
-  - checkout: self
-    clean: true
+jobs:
+  - job: Validate
+    displayName: Test and analyze
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - template: templates/npm-setup.yml
 
-  - task: UseNode@1
-    displayName: Use Node.js 24
-    inputs:
-      version: 24.x
+      - script: npm run format:check
+        displayName: Check formatting
 
-  - task: Cache@2
-    displayName: Cache npm downloads
-    inputs:
-      key: 'npm | "$(Agent.OS)" | package-lock.json'
-      restoreKeys: |
-        npm | "$(Agent.OS)"
-      path: $(npm_config_cache)
+      - script: npm run lint
+        displayName: Lint
 
-  - script: npm ci --no-audit --no-fund
-    displayName: Install dependencies
+      - script: npm run typecheck
+        displayName: Typecheck
 
-  - script: >
-      npm test --
-      --reporter=default
-      --reporter=junit
-      --outputFile.junit="$(Common.TestResultsDirectory)/vitest-junit.xml"
-    displayName: Run unit tests
+      - script: >
+          npm run test:coverage --
+          --reporter=default
+          --reporter=junit
+          --outputFile.junit="$(Common.TestResultsDirectory)/vitest-junit.xml"
+        displayName: Test with coverage
 
-  - task: PublishTestResults@2
-    displayName: Publish unit test results
-    condition: succeededOrFailed()
-    inputs:
-      testResultsFormat: JUnit
-      testResultsFiles: $(Common.TestResultsDirectory)/vitest-junit.xml
-      testRunTitle: BotSpector unit tests
-      failTaskOnFailedTests: true
-      failTaskOnMissingResultsFile: true
+      - task: PublishTestResults@2
+        displayName: Publish unit test results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: $(Common.TestResultsDirectory)/vitest-junit.xml
+          testRunTitle: BotSpector unit tests
+          failTaskOnFailedTests: true
+          failTaskOnMissingResultsFile: true
 
-  - script: npm run typecheck
-    displayName: Typecheck
+      - task: PublishCodeCoverageResults@2
+        displayName: Publish code coverage
+        condition: succeededOrFailed()
+        inputs:
+          summaryFileLocation: $(Build.SourcesDirectory)/coverage/cobertura-coverage.xml
+          pathToSources: $(Build.SourcesDirectory)
+          failIfCoverageEmpty: true
 
-  - script: npm run build
-    displayName: Build application
+      - script: npm run security:dependencies
+        displayName: Audit dependencies
+
+      - script: npm run security:secrets
+        displayName: Scan for secrets
+
+      - script: npm run build
+        displayName: Build application
+
+  - job: Package_macOS
+    displayName: Package and smoke test macOS
+    dependsOn: Validate
+    pool:
+      vmImage: macos-latest
+    steps:
+      - template: templates/npm-setup.yml
+
+      - bash: |
+          set -euo pipefail
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            npm run package -- --mac --arm64
+          else
+            npm run package -- --mac --x64
+          fi
+        displayName: Package macOS application
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - bash: |
+          set -euo pipefail
+          executable="$(find dist -path '*/BotSpector.app/Contents/MacOS/BotSpector' -type f -print -quit)"
+          if [[ -z "$executable" ]]; then
+            echo 'Packaged BotSpector executable was not found.' >&2
+            exit 1
+          fi
+          BOTSPECTOR_EXECUTABLE="$PWD/$executable" npm run test:smoke
+        displayName: Smoke test packaged macOS application
+        env:
+          CI: 'true'
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: $(Common.TestResultsDirectory)/playwright-macos.xml
+
+      - task: PublishTestResults@2
+        displayName: Publish macOS smoke results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: $(Common.TestResultsDirectory)/playwright-macos.xml
+          testRunTitle: BotSpector macOS package smoke
+          failTaskOnFailedTests: true
+          failTaskOnMissingResultsFile: true
+
+      - task: CopyFiles@2
+        displayName: Collect macOS installers
+        inputs:
+          SourceFolder: $(Build.SourcesDirectory)/dist
+          Contents: |
+            *.dmg
+            *.zip
+            *.blockmap
+          TargetFolder: $(Build.ArtifactStagingDirectory)/macos
+
+      - publish: $(Build.ArtifactStagingDirectory)/macos
+        displayName: Publish macOS installers
+        artifact: BotSpector-macOS
+
+  - job: Package_Windows
+    displayName: Package and smoke test Windows
+    dependsOn: Validate
+    pool:
+      vmImage: windows-latest
+    steps:
+      - template: templates/npm-setup.yml
+
+      - powershell: npm run package -- --win --x64
+        displayName: Package Windows application
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - powershell: |
+          $executable = Get-ChildItem -Path dist -Filter BotSpector.exe -Recurse | Select-Object -First 1
+          if (-not $executable) {
+            throw 'Packaged BotSpector executable was not found.'
+          }
+          $env:BOTSPECTOR_EXECUTABLE = $executable.FullName
+          npm run test:smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        displayName: Smoke test packaged Windows application
+        env:
+          CI: 'true'
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: $(Common.TestResultsDirectory)/playwright-windows.xml
+
+      - task: PublishTestResults@2
+        displayName: Publish Windows smoke results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: $(Common.TestResultsDirectory)/playwright-windows.xml
+          testRunTitle: BotSpector Windows package smoke
+          failTaskOnFailedTests: true
+          failTaskOnMissingResultsFile: true
+
+      - task: CopyFiles@2
+        displayName: Collect Windows installers
+        inputs:
+          SourceFolder: $(Build.SourcesDirectory)/dist
+          Contents: |
+            *.exe
+            *.zip
+            *.blockmap
+          TargetFolder: $(Build.ArtifactStagingDirectory)/windows
+
+      - publish: $(Build.ArtifactStagingDirectory)/windows
+        displayName: Publish Windows installers
+        artifact: BotSpector-Windows

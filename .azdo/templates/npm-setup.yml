@@ -1,0 +1,20 @@
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - task: UseNode@1
+    displayName: Use Node.js 24
+    inputs:
+      version: 24.x
+
+  - task: Cache@2
+    displayName: Cache npm downloads
+    inputs:
+      key: 'npm | "$(Agent.OS)" | package-lock.json'
+      restoreKeys: |
+        npm | "$(Agent.OS)"
+      path: $(npm_config_cache)
+
+  - script: npm ci --no-audit --no-fund
+    displayName: Install dependencies

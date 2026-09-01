@@ -164,7 +164,9 @@ export function AdoCommentsTab({
         return (
           <div key={t.id} className="ado-thread">
             <div className="ado-thread-head">
-              <span className={`thread-pill ${statusClass(t.status)}`}>{statusLabel(t.status)}</span>
+              <span className={`thread-pill ${statusClass(t.status)}`}>
+                {statusLabel(t.status)}
+              </span>
               {t.filePath ? (
                 <span className="ado-thread-loc mono small">
                   {t.filePath}
@@ -237,12 +239,19 @@ export function AdoCommentsTab({
                   {tBusy === 'explain' ? '…' : 'Explain this comment'}
                 </button>
                 {t.filePath && (
-                  <button className="btn" onClick={() => void viewCode(t)} disabled={tBusy !== null}>
+                  <button
+                    className="btn"
+                    onClick={() => void viewCode(t)}
+                    disabled={tBusy !== null}
+                  >
                     {tBusy === 'code' ? '…' : showCode[t.id] ? 'Hide code' : 'View code'}
                   </button>
                 )}
                 {t.filePath && onOpenInFiles && (
-                  <button className="btn" onClick={() => onOpenInFiles(t.filePath as string, t.line)}>
+                  <button
+                    className="btn"
+                    onClick={() => onOpenInFiles(t.filePath as string, t.line)}
+                  >
                     Show in Files
                   </button>
                 )}

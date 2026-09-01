@@ -99,10 +99,7 @@ function isReviewStale(pr: PullRequest): boolean {
 
 // A triaged/clean PR that has changed since we reviewed it (needs a re-review).
 function isStale(pr: PullRequest): boolean {
-  return (
-    (pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress') &&
-    commitChanged(pr)
-  )
+  return (pr.reviewStatus === 'reviewed' || pr.reviewStatus === 'in_progress') && commitChanged(pr)
 }
 
 // A stale PR is ready for another look once the author has engaged with every
@@ -141,8 +138,7 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
     localStorage.setItem(FILTERS_KEY, JSON.stringify(filters))
   }, [filters])
 
-  const toggleFilter = (key: keyof Filters): void =>
-    setFilters((f) => ({ ...f, [key]: !f[key] }))
+  const toggleFilter = (key: keyof Filters): void => setFilters((f) => ({ ...f, [key]: !f[key] }))
 
   const refresh = useCallback(async (silent = false): Promise<void> => {
     if (refreshing.current) return
@@ -234,9 +230,7 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
   const approvedByMe = triageable
     .filter((pr) => !isMine(pr, myIdentity) && isApprovedByMe(pr))
     .sort(byOldest)
-  const others = triageable.filter(
-    (pr) => !isMine(pr, myIdentity) && !isApprovedByMe(pr)
-  )
+  const others = triageable.filter((pr) => !isMine(pr, myIdentity) && !isApprovedByMe(pr))
   // A stale PR is "ready for re-review" once the author has engaged with every
   // comment we posted (a reply or a resolved thread), or we posted none. Until
   // then it's just "changed since review" and shouldn't demand our attention.
@@ -348,11 +342,18 @@ export function PrList({ onOpen, myIdentity }: Props): JSX.Element {
 
       {error && <div className="banner err">{error}</div>}
 
-      {!loading && !bgBusy && triageable.length === 0 && (!filters.showDeclined || declined.length === 0) && !error && (
-        <div className="empty">
-          <p>Nothing to review here 👀 — try Refresh, adjust the filters, or check your Azure DevOps settings.</p>
-        </div>
-      )}
+      {!loading &&
+        !bgBusy &&
+        triageable.length === 0 &&
+        (!filters.showDeclined || declined.length === 0) &&
+        !error && (
+          <div className="empty">
+            <p>
+              Nothing to review here 👀 — try Refresh, adjust the filters, or check your Azure
+              DevOps settings.
+            </p>
+          </div>
+        )}
 
       {readyForReReview.length > 0 && (
         <PrSection
@@ -523,13 +524,17 @@ function PrSection({
                     className="mini-status-select"
                     title="Set BotSpector review status"
                     value={
-                      ['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus)
+                      ['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(
+                        pr.reviewStatus
+                      )
                         ? pr.reviewStatus
                         : ''
                     }
                     onChange={(e) => onStatus(pr.id, e.target.value as ReviewStatus)}
                   >
-                    {!['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(pr.reviewStatus) && (
+                    {!['not_reviewed', 'in_progress', 'reviewed', 'declined'].includes(
+                      pr.reviewStatus
+                    ) && (
                       <option value="" disabled>
                         —
                       </option>

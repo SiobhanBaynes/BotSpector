@@ -28,7 +28,10 @@ app.setName('BotSpector')
 // Pin a stable user-data directory so settings/DB survive app renames/rebrands.
 // (Electron derives userData from the package name by default, so renaming the
 // app would otherwise point it at a fresh, empty folder.)
-app.setPath('userData', join(app.getPath('appData'), 'botspector'))
+app.setPath(
+  'userData',
+  process.env.BOTSPECTOR_USER_DATA_DIR || join(app.getPath('appData'), 'botspector')
+)
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({

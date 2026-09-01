@@ -1,7 +1,13 @@
 import { buildArgs, callTool, findTool, parseJsonFromText } from './adoClient'
 import { getSetting } from '../db/repo'
 import { secrets } from '../secrets'
-import type { AdoCommentThread, ChangedFile, PrAdoDetails, PrReviewer, PullRequest } from '../../shared/types'
+import type {
+  AdoCommentThread,
+  ChangedFile,
+  PrAdoDetails,
+  PrReviewer,
+  PullRequest
+} from '../../shared/types'
 
 /**
  * Higher-level Azure DevOps operations built on the MCP tools. These discover
@@ -45,9 +51,12 @@ export async function fetchCurrentUserDisplayName(): Promise<string | null> {
   if (!org || !pat) return null
 
   const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
-  const res = await fetch(`https://dev.azure.com/${org}/_apis/connectionData?api-version=7.1-preview`, {
-    headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }
-  })
+  const res = await fetch(
+    `https://dev.azure.com/${org}/_apis/connectionData?api-version=7.1-preview`,
+    {
+      headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }
+    }
+  )
   if (!res.ok) {
     throw new Error(`Could not read Azure DevOps identity (${res.status})`)
   }
@@ -76,9 +85,12 @@ export async function fetchCurrentUserId(): Promise<string | null> {
   const pat = secrets.getAdoPat()
   if (!org || !pat) return null
   const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
-  const res = await fetch(`https://dev.azure.com/${org}/_apis/connectionData?api-version=7.1-preview`, {
-    headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }
-  })
+  const res = await fetch(
+    `https://dev.azure.com/${org}/_apis/connectionData?api-version=7.1-preview`,
+    {
+      headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' }
+    }
+  )
   if (!res.ok) return null
   const data = (await res.json()) as { authenticatedUser?: { id?: string } }
   cachedUserId = data.authenticatedUser?.id ?? null
@@ -129,8 +141,7 @@ async function fetchCommentCounts(adoPrId: number): Promise<{ total: number; unr
   }
   const threads = (data.value ?? []).filter(
     (t) =>
-      !t.isDeleted &&
-      (t.comments ?? []).some((c) => !c.isDeleted && c.commentType !== 'system')
+      !t.isDeleted && (t.comments ?? []).some((c) => !c.isDeleted && c.commentType !== 'system')
   )
   const total = threads.length
   const unresolved = threads.filter((t) => !isResolvedThreadStatus(t.status)).length
@@ -205,7 +216,13 @@ export async function fetchPullRequestDetails(adoPrId: number): Promise<PrAdoDet
   const myId = await fetchCurrentUserId().catch(() => null)
   const myVote = myId ? (reviewers.find((r) => r.id === myId)?.vote ?? 0) : 0
   const commentCount = await fetchActiveThreadCount(adoPrId).catch(() => 0)
-  return { status: data.status ?? 'active', isDraft: !!data.isDraft, reviewers, myVote, commentCount }
+  return {
+    status: data.status ?? 'active',
+    isDraft: !!data.isDraft,
+    reviewers,
+    myVote,
+    commentCount
+  }
 }
 
 /**
@@ -444,12 +461,7 @@ type PrListItem = Omit<
 
 // Map a raw Azure DevOps pull-request object (the REST and MCP shapes match)
 // into our list item.
-function mapPullRequestRow(
-  r: AnyRecord,
-  org: string,
-  project: string,
-  repo: string
-): PrListItem {
+function mapPullRequestRow(r: AnyRecord, org: string, project: string, repo: string): PrListItem {
   const prId = Number(r.pullRequestId ?? r.id ?? 0)
   const createdBy = (r.createdBy ?? {}) as AnyRecord
   const repository = (r.repository ?? {}) as AnyRecord
@@ -977,9 +989,7 @@ export async function replyToPullRequestThread(
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(
-      `Failed to post reply (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`
-    )
+    throw new Error(`Failed to post reply (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`)
   }
   return true
 }
@@ -1007,9 +1017,7 @@ export interface PullRequestSummary {
   isDraft: boolean
 }
 
-export async function fetchPullRequestSummary(
-  adoPrId: number
-): Promise<PullRequestSummary | null> {
+export async function fetchPullRequestSummary(adoPrId: number): Promise<PullRequestSummary | null> {
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
 
@@ -1156,7 +1164,8 @@ export async function getPullRequestContext(adoPrId: number): Promise<PrContext>
 
   // Concise PR metadata. Prefer REST; fall back to the MCP get tool only if
   // REST isn't configured, so a renamed MCP tool can't strip the seed context.
-  let pr: AnyRecord | undefined = (await fetchPullRequestRest(adoPrId).catch(() => null)) ?? undefined
+  let pr: AnyRecord | undefined =
+    (await fetchPullRequestRest(adoPrId).catch(() => null)) ?? undefined
   let rawGetText = ''
   if (!pr) {
     const getTool =

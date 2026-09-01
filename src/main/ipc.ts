@@ -63,13 +63,13 @@ import {
   refineComment,
   reviewPullRequest
 } from './agent/reviewer'
+import { GENERAL_SKILL_ID, getSkill, listAllSkills, skillOverrideSettingKey } from './agent/skills'
 import {
-  GENERAL_SKILL_ID,
-  getSkill,
-  listAllSkills,
-  skillOverrideSettingKey
-} from './agent/skills'
-import { importSkillFromFolder, importSkillFromGit, removeUserSkill, userSkillsDir } from './agent/skillStore'
+  importSkillFromFolder,
+  importSkillFromGit,
+  removeUserSkill,
+  userSkillsDir
+} from './agent/skillStore'
 import { openLogs, logger } from './logger'
 
 function ok<T>(data: T): IpcResult<T> {
@@ -174,8 +174,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.settingsSave,
-    (_e, partial: Partial<Pick<Settings, 'adoOrg' | 'adoProject' | 'adoRepo' | 'model' | 'myIdentity'>>):
-      IpcResult<Settings> => {
+    (
+      _e,
+      partial: Partial<Pick<Settings, 'adoOrg' | 'adoProject' | 'adoRepo' | 'model' | 'myIdentity'>>
+    ): IpcResult<Settings> => {
       try {
         if (partial.adoOrg !== undefined) repo.setSetting('adoOrg', partial.adoOrg)
         if (partial.adoProject !== undefined) repo.setSetting('adoProject', partial.adoProject)
@@ -267,18 +269,15 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(
-    IPC.skillGetInstructions,
-    (_e, skillId: string): IpcResult<SkillInstructions> => {
-      try {
-        const res = readSkillInstructions(skillId)
-        if (!res) throw new Error(`Unknown skill: ${skillId}`)
-        return ok(res)
-      } catch (e) {
-        return fail(e)
-      }
+  ipcMain.handle(IPC.skillGetInstructions, (_e, skillId: string): IpcResult<SkillInstructions> => {
+    try {
+      const res = readSkillInstructions(skillId)
+      if (!res) throw new Error(`Unknown skill: ${skillId}`)
+      return ok(res)
+    } catch (e) {
+      return fail(e)
     }
-  )
+  })
 
   ipcMain.handle(
     IPC.skillSaveInstructions,
@@ -566,7 +565,11 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.prSetAdoStatus,
-    async (_e, prId: number, status: 'active' | 'abandoned'): Promise<IpcResult<PrAdoDetails | null>> => {
+    async (
+      _e,
+      prId: number,
+      status: 'active' | 'abandoned'
+    ): Promise<IpcResult<PrAdoDetails | null>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
@@ -844,17 +847,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(
-    IPC.prFetchImage,
-    async (_e, url: string): Promise<IpcResult<string | null>> => {
-      try {
-        if (!url || typeof url !== 'string') return ok(null)
-        return ok(await fetchImageAsDataUrl(url))
-      } catch (e) {
-        return fail(e)
-      }
+  ipcMain.handle(IPC.prFetchImage, async (_e, url: string): Promise<IpcResult<string | null>> => {
+    try {
+      if (!url || typeof url !== 'string') return ok(null)
+      return ok(await fetchImageAsDataUrl(url))
+    } catch (e) {
+      return fail(e)
     }
-  )
+  })
 
   // Run a single reviewer pass for one model. Extracted so it can be reused by
   // both the single-model handler and the multi-model "panel review" handler.
@@ -939,54 +939,71 @@ export function registerIpcHandlers(): void {
     return headCommit
   }
 
-  ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string, skillIdArg?: string, depthArg?: string): Promise<IpcResult<Review>> => {
-    try {
-      const pr = repo.getPullRequest(prId)
-      if (!pr) throw new Error('Pull request not found')
-      const model = resolveModel(modelArg)
-      const skillId = (skillIdArg ?? '').trim() || GENERAL_SKILL_ID
-      const depth = resolveReviewDepth(depthArg)
-
-      // Capture the current status/conversation of previously posted comments
-      // before this re-review replaces the old findings, so that history is kept.
+  ipcMain.handle(
+    IPC.prReview,
+    async (
+      _e,
+      prId: number,
+      modelArg?: string,
+      skillIdArg?: string,
+      depthArg?: string
+    ): Promise<IpcResult<Review>> => {
       try {
-        await syncCommentThreads(prId)
+        const pr = repo.getPullRequest(prId)
+        if (!pr) throw new Error('Pull request not found')
+        const model = resolveModel(modelArg)
+        const skillId = (skillIdArg ?? '').trim() || GENERAL_SKILL_ID
+        const depth = resolveReviewDepth(depthArg)
+
+        // Capture the current status/conversation of previously posted comments
+        // before this re-review replaces the old findings, so that history is kept.
+        try {
+          await syncCommentThreads(prId)
+        } catch (e) {
+          logger.warn(`could not sync comment threads before re-review for pr id ${prId}`, {
+            error: (e as Error).message
+          })
+        }
+
+        repo.setReviewStatus(prId, 'reviewing')
+        send(IPC.prReviewProgress, { prId, message: `Starting ${depth} review…` })
+        logger.info(
+          `review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}, skill ${skillId}, depth ${depth}`
+        )
+
+        const headCommit = await captureHeadCommit(prId)
+        await runReviewerPass(prId, model, headCommit, skillId, depth, [model], (message) =>
+          send(IPC.prReviewProgress, { prId, message })
+        )
+        // A fresh review has untriaged (open) findings, so this lands as
+        // 'in_progress'; it only becomes 'reviewed' once every finding is handled.
+        repo.recomputeReviewStatus(prId)
+
+        const review = repo.getReviewForPr(prId)
+        if (!review) throw new Error('Review was not saved')
+        send(IPC.prReviewDone, { prId, status: 'reviewed' })
+        return ok(review)
       } catch (e) {
-        logger.warn(`could not sync comment threads before re-review for pr id ${prId}`, {
-          error: (e as Error).message
-        })
+        repo.setReviewStatus(prId, 'error')
+        logger.error(`review failed for pr id ${prId}`, { error: (e as Error).message })
+        send(IPC.prReviewDone, { prId, status: 'error' })
+        return fail(e)
       }
-
-      repo.setReviewStatus(prId, 'reviewing')
-      send(IPC.prReviewProgress, { prId, message: `Starting ${depth} review…` })
-      logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}, skill ${skillId}, depth ${depth}`)
-
-      const headCommit = await captureHeadCommit(prId)
-      await runReviewerPass(prId, model, headCommit, skillId, depth, [model], (message) =>
-        send(IPC.prReviewProgress, { prId, message })
-      )
-      // A fresh review has untriaged (open) findings, so this lands as
-      // 'in_progress'; it only becomes 'reviewed' once every finding is handled.
-      repo.recomputeReviewStatus(prId)
-
-      const review = repo.getReviewForPr(prId)
-      if (!review) throw new Error('Review was not saved')
-      send(IPC.prReviewDone, { prId, status: 'reviewed' })
-      return ok(review)
-    } catch (e) {
-      repo.setReviewStatus(prId, 'error')
-      logger.error(`review failed for pr id ${prId}`, { error: (e as Error).message })
-      send(IPC.prReviewDone, { prId, status: 'error' })
-      return fail(e)
     }
-  })
+  )
 
   // Panel review: run several reviewers sequentially so their scrutiny stacks.
   // Each pass sees the findings the earlier ones raised, so overlaps become
   // "+1" contributions and only genuinely new issues are added.
   ipcMain.handle(
     IPC.prReviewPanel,
-    async (_e, prId: number, modelsArg: string[], skillIdArg?: string, depthArg?: string): Promise<IpcResult<Review>> => {
+    async (
+      _e,
+      prId: number,
+      modelsArg: string[],
+      skillIdArg?: string,
+      depthArg?: string
+    ): Promise<IpcResult<Review>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
@@ -1067,18 +1084,21 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(IPC.findingExplain, async (_e, findingId: number, modelArg?: string): Promise<IpcResult<string>> => {
-    try {
-      const finding = repo.getFinding(findingId)
-      if (!finding) throw new Error('Finding not found')
-      const model = resolveModel(modelArg)
-      const explanation = await explainFinding(finding, model)
-      repo.setFindingExplanation(findingId, explanation)
-      return ok(explanation)
-    } catch (e) {
-      return fail(e)
+  ipcMain.handle(
+    IPC.findingExplain,
+    async (_e, findingId: number, modelArg?: string): Promise<IpcResult<string>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        const model = resolveModel(modelArg)
+        const explanation = await explainFinding(finding, model)
+        repo.setFindingExplanation(findingId, explanation)
+        return ok(explanation)
+      } catch (e) {
+        return fail(e)
+      }
     }
-  })
+  )
 
   ipcMain.handle(
     IPC.findingCheckResolved,
@@ -1121,7 +1141,13 @@ export function registerIpcHandlers(): void {
               const text = fileDiff.lines
                 .map((ln) => {
                   const sign =
-                    ln.kind === 'add' ? '+' : ln.kind === 'del' ? '-' : ln.kind === 'gap' ? ' ' : ' '
+                    ln.kind === 'add'
+                      ? '+'
+                      : ln.kind === 'del'
+                        ? '-'
+                        : ln.kind === 'gap'
+                          ? ' '
+                          : ' '
                   return `${sign}${ln.text}`
                 })
                 .join('\n')
@@ -1155,12 +1181,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.prChat,
-    async (
-      _e,
-      prId: number,
-      message: string,
-      modelArg?: string
-    ): Promise<IpcResult<string>> => {
+    async (_e, prId: number, message: string, modelArg?: string): Promise<IpcResult<string>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
@@ -1226,12 +1247,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.findingCreateFromAdoComment,
-    async (
-      _e,
-      prId: number,
-      threadId: number,
-      modelArg?: string
-    ): Promise<IpcResult<Finding>> => {
+    async (_e, prId: number, threadId: number, modelArg?: string): Promise<IpcResult<Finding>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
@@ -1247,9 +1263,7 @@ export function registerIpcHandlers(): void {
         const locLabel = thread.filePath
           ? `${thread.filePath}${thread.line ? `:${thread.line}` : ''}`
           : 'general PR comment'
-        const conversation = thread.comments
-          .map((c) => `${c.author}: ${c.content}`)
-          .join('\n\n')
+        const conversation = thread.comments.map((c) => `${c.author}: ${c.content}`).join('\n\n')
         const assistantMessage =
           `A reviewer left this comment on ${locLabel}. Turn the concern it raises ` +
           `into a review finding:\n\n${conversation}`
@@ -1311,9 +1325,8 @@ export function registerIpcHandlers(): void {
             branch: pr?.sourceBranch || undefined
           }).catch(() => null)) ?? ''
         const before = baseCommit
-          ? ((await fetchFileContent(finding.filePath, { commit: baseCommit }).catch(
-              () => null
-            )) ?? '')
+          ? ((await fetchFileContent(finding.filePath, { commit: baseCommit }).catch(() => null)) ??
+            '')
           : ''
 
         const snippet = buildDiffSnippet(finding.filePath, before, after, finding.line)
@@ -1342,7 +1355,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.findingRefineComment,
-    async (_e, findingId: number, instruction: string, modelArg?: string): Promise<IpcResult<string>> => {
+    async (
+      _e,
+      findingId: number,
+      instruction: string,
+      modelArg?: string
+    ): Promise<IpcResult<string>> => {
       try {
         const finding = repo.getFinding(findingId)
         if (!finding) throw new Error('Finding not found')
@@ -1395,54 +1413,57 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(IPC.findingPostComment, async (_e, findingId: number): Promise<IpcResult<null>> => {
-    try {
-      const finding = repo.getFinding(findingId)
-      if (!finding) throw new Error('Finding not found')
-      if (!finding.comment) throw new Error('Draft a comment before posting')
+  ipcMain.handle(
+    IPC.findingPostComment,
+    async (_e, findingId: number): Promise<IpcResult<null>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        if (!finding.comment) throw new Error('Draft a comment before posting')
 
-      // Find the PR this finding belongs to.
-      const review = repo.getReviewById(finding.reviewId)
-      const pr = review ? repo.getPullRequest(review.prId) : null
-      if (!pr) throw new Error('Could not find the pull request for this finding')
+        // Find the PR this finding belongs to.
+        const review = repo.getReviewById(finding.reviewId)
+        const pr = review ? repo.getPullRequest(review.prId) : null
+        if (!pr) throw new Error('Could not find the pull request for this finding')
 
-      // Post only the comment text; the finding id/severity are tracked
-      // internally via the Azure DevOps thread id and never exposed in ADO.
-      const body = finding.comment.draftText
-      logger.info(`posting comment for ${finding.publicId} to ADO PR #${pr.adoPrId}`)
-      const threadId = await postPullRequestComment(
-        pr.adoPrId,
-        body,
-        finding.filePath,
-        finding.line
-      )
-      repo.markCommentPosted(findingId, threadId)
-      repo.setFindingStatus(findingId, 'posted')
-      // Posting responds to a finding, which may complete the PR's review.
-      repo.recomputeReviewStatus(pr.id)
-      // Posting a comment puts me on the PR as an optional reviewer.
-      void ensureSelfReviewer(pr.id)
-      // Track the posted comment at the PR level so its thread status and
-      // conversation survive future re-reviews (which replace findings).
-      if (threadId != null) {
-        repo.recordPostedComment({
-          prId: pr.id,
-          adoThreadId: threadId,
-          findingPublicId: finding.publicId,
-          findingTitle: finding.title,
-          bucket: finding.bucket,
-          commentText: finding.comment.draftText
+        // Post only the comment text; the finding id/severity are tracked
+        // internally via the Azure DevOps thread id and never exposed in ADO.
+        const body = finding.comment.draftText
+        logger.info(`posting comment for ${finding.publicId} to ADO PR #${pr.adoPrId}`)
+        const threadId = await postPullRequestComment(
+          pr.adoPrId,
+          body,
+          finding.filePath,
+          finding.line
+        )
+        repo.markCommentPosted(findingId, threadId)
+        repo.setFindingStatus(findingId, 'posted')
+        // Posting responds to a finding, which may complete the PR's review.
+        repo.recomputeReviewStatus(pr.id)
+        // Posting a comment puts me on the PR as an optional reviewer.
+        void ensureSelfReviewer(pr.id)
+        // Track the posted comment at the PR level so its thread status and
+        // conversation survive future re-reviews (which replace findings).
+        if (threadId != null) {
+          repo.recordPostedComment({
+            prId: pr.id,
+            adoThreadId: threadId,
+            findingPublicId: finding.publicId,
+            findingTitle: finding.title,
+            bucket: finding.bucket,
+            commentText: finding.comment.draftText
+          })
+        }
+        logger.info(`posted comment for ${finding.publicId} (thread ${threadId ?? 'n/a'})`)
+        return ok(null)
+      } catch (e) {
+        logger.error(`failed to post comment for finding ${findingId}`, {
+          error: (e as Error).message
         })
+        return fail(e)
       }
-      logger.info(`posted comment for ${finding.publicId} (thread ${threadId ?? 'n/a'})`)
-      return ok(null)
-    } catch (e) {
-      logger.error(`failed to post comment for finding ${findingId}`, {
-        error: (e as Error).message
-      })
-      return fail(e)
     }
-  })
+  )
 
   // ---- diagnostics ----
   ipcMain.handle(IPC.logsOpen, async (): Promise<IpcResult<null>> => {
@@ -1496,11 +1517,23 @@ function buildDiffSnippet(
           entries.push({ kind: 'add', text: line, oldLine: null, newLine: newNum, anchor: newNum })
         } else if (part.removed) {
           oldNum++
-          entries.push({ kind: 'del', text: line, oldLine: oldNum, newLine: null, anchor: newNum + 1 })
+          entries.push({
+            kind: 'del',
+            text: line,
+            oldLine: oldNum,
+            newLine: null,
+            anchor: newNum + 1
+          })
         } else {
           oldNum++
           newNum++
-          entries.push({ kind: 'ctx', text: line, oldLine: oldNum, newLine: newNum, anchor: newNum })
+          entries.push({
+            kind: 'ctx',
+            text: line,
+            oldLine: oldNum,
+            newLine: newNum,
+            anchor: newNum
+          })
         }
       }
     }
@@ -1550,7 +1583,13 @@ function buildFileDiff(path: string, before: string, after: string): FileDiff {
       } else if (part.removed) {
         oldNum++
         removed++
-        entries.push({ kind: 'del', text: line, oldLine: oldNum, newLine: null, anchor: newNum + 1 })
+        entries.push({
+          kind: 'del',
+          text: line,
+          oldLine: oldNum,
+          newLine: null,
+          anchor: newNum + 1
+        })
       } else {
         oldNum++
         newNum++

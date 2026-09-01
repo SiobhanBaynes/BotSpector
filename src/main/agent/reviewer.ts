@@ -137,22 +137,22 @@ function compileToolAllowlist(patterns: string[] | undefined): RegExp[] | undefi
     .map((p) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))
 }
 
-async function mcpToolsAsDefinitions(
-  toolAllowlist?: string[]
-): Promise<ToolDefinition[]> {
+async function mcpToolsAsDefinitions(toolAllowlist?: string[]): Promise<ToolDefinition[]> {
   const tools = await listTools()
   const allow = compileToolAllowlist(toolAllowlist)
-  return tools
-    .filter((t) => !EXCLUDED_TOOLS.some((re) => re.test(t.name)))
-    // Hard denylist of write tools — applied unconditionally, before any
-    // skill allowlist, so read-only review is guaranteed.
-    .filter((t) => !WRITE_TOOLS.some((re) => re.test(t.name)))
-    .filter((t) => (allow ? allow.some((re) => re.test(t.name)) : true))
-    .map((t) => ({
-      name: t.name,
-      description: t.description.slice(0, 1024),
-      parameters: (t.inputSchema as Record<string, unknown>) ?? { type: 'object' }
-    }))
+  return (
+    tools
+      .filter((t) => !EXCLUDED_TOOLS.some((re) => re.test(t.name)))
+      // Hard denylist of write tools — applied unconditionally, before any
+      // skill allowlist, so read-only review is guaranteed.
+      .filter((t) => !WRITE_TOOLS.some((re) => re.test(t.name)))
+      .filter((t) => (allow ? allow.some((re) => re.test(t.name)) : true))
+      .map((t) => ({
+        name: t.name,
+        description: t.description.slice(0, 1024),
+        parameters: (t.inputSchema as Record<string, unknown>) ?? { type: 'object' }
+      }))
+  )
 }
 
 export type ProgressFn = (message: string) => void
@@ -450,14 +450,17 @@ const mergeReportSchema = z.object({
   decisions: z.array(mergeDecisionSchema)
 })
 
-function summarizeFindingForMerge(f: {
-  publicId?: string
-  bucket: string
-  title: string
-  description: string
-  filePath: string | null
-  line: number | null
-}, index?: number): string {
+function summarizeFindingForMerge(
+  f: {
+    publicId?: string
+    bucket: string
+    title: string
+    description: string
+    filePath: string | null
+    line: number | null
+  },
+  index?: number
+): string {
   const head = f.publicId ? f.publicId : `N-${(index ?? 0) + 1}`
   const loc = f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ''})` : ''
   return `- ${head} [${f.bucket}]${loc}: ${f.title}\n    ${f.description}`
@@ -485,9 +488,12 @@ async function mergeAgainstExisting(
   const candidateBlock = candidates.map((f, i) => summarizeFindingForMerge(f, i)).join('\n')
 
   const existingIds = new Set(existing.map((f) => f.publicId))
-  logger.info(`review pr#${adoPrId}: merging ${candidates.length} new candidate(s) against ${existing.length} existing finding(s)`, {
-    model
-  })
+  logger.info(
+    `review pr#${adoPrId}: merging ${candidates.length} new candidate(s) against ${existing.length} existing finding(s)`,
+    {
+      model
+    }
+  )
 
   let decisions: Array<{ candidateIndex: number; duplicateOf?: string | null }> = []
   try {
@@ -537,7 +543,9 @@ async function mergeAgainstExisting(
       findings.push(candidates[i])
     }
   }
-  logger.info(`review pr#${adoPrId}: merge kept ${findings.length} new finding(s), converted ${additions.length} to contribution(s)`)
+  logger.info(
+    `review pr#${adoPrId}: merge kept ${findings.length} new finding(s), converted ${additions.length} to contribution(s)`
+  )
   return { findings, additions }
 }
 
@@ -662,8 +670,7 @@ export async function chatAboutPullRequest(
       messages.push({ role: 'assistant', content })
       messages.push({
         role: 'user',
-        content:
-          'Go ahead and do that now: make the tool calls you need, then give me your answer.'
+        content: 'Go ahead and do that now: make the tool calls you need, then give me your answer.'
       })
       continue
     }
@@ -725,7 +732,10 @@ export async function extractFindingFromChat(
   const result = await complete({ model, messages })
   let raw = (result.content ?? '').trim()
   // Strip markdown fences if the model added them despite instructions.
-  raw = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  raw = raw
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
 
   let parsed: unknown
   try {
@@ -811,9 +821,7 @@ export async function assessFindingResolution(
   try {
     const parsed = JSON.parse(raw) as Partial<ResolutionAssessment>
     const verdict =
-      parsed.verdict === 'resolved' || parsed.verdict === 'unresolved'
-        ? parsed.verdict
-        : 'unclear'
+      parsed.verdict === 'resolved' || parsed.verdict === 'unresolved' ? parsed.verdict : 'unclear'
     const explanation = (parsed.explanation ?? '').trim()
     return { verdict, explanation: explanation || 'No explanation provided.' }
   } catch {

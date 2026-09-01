@@ -153,10 +153,7 @@ export function FilesTab({ prId, model, request, onChatAbout }: Props): JSX.Elem
               <div className="file-diff">
                 <div className="file-diff-actions">
                   {onChatAbout && (
-                    <button
-                      className="btn small-btn"
-                      onClick={() => onChatAbout(f.path)}
-                    >
+                    <button className="btn small-btn" onClick={() => onChatAbout(f.path)}>
                       💬 Chat about this change
                     </button>
                   )}

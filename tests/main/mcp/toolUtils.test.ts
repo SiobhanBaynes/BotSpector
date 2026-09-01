@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  buildArgs,
-  parseJsonFromText,
-  type McpTool
-} from '../../../src/main/mcp/toolUtils'
+import { buildArgs, parseJsonFromText, type McpTool } from '../../../src/main/mcp/toolUtils'
 
 function makeTool(properties?: Record<string, unknown>): McpTool {
   return {
@@ -119,7 +115,7 @@ describe('parseJsonFromText', () => {
     expect(parseJsonFromText('{"first":1}\n{"second":2}')).toEqual({ first: 1 })
   })
 
-  it.each(['', 'plain text', '{"broken":', '[1,2', '{invalid}']) (
+  it.each(['', 'plain text', '{"broken":', '[1,2', '{invalid}'])(
     'returns null when no valid JSON can be extracted from %j',
     (text) => {
       expect(parseJsonFromText(text)).toBeNull()
