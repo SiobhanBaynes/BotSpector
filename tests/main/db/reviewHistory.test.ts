@@ -12,7 +12,13 @@ vi.mock('../../../src/main/db/db', () => ({
   }
 }))
 
-import { createReview, listReviewSummaries, type NewFinding } from '../../../src/main/db/repo'
+import {
+  applyContributions,
+  createReview,
+  getReviewForPr,
+  listReviewSummaries,
+  type NewFinding
+} from '../../../src/main/db/repo'
 
 function finding(publicId: string, title = publicId): NewFinding {
   return {
@@ -135,6 +141,26 @@ describe('review history persistence', () => {
     const secondRun = listReviewSummaries(prId)[0]
     expect(secondRun.model).toBe('second-model')
     expect(secondRun.createdFindings).toEqual(['F-002'])
+  })
+
+  it('persists contributions and returns only valid contributor names', () => {
+    createReview(prId, 'gpt-reviewer', [finding('F-001')], '{}', 'abc123', {
+      settings: settings(),
+      contributedFindings: []
+    })
+    database
+      .prepare('UPDATE findings SET contributors = \'["existing-model", 42]\' WHERE public_id = ?')
+      .run('F-001')
+
+    applyContributions(prId, 'claude-reviewer', [
+      { publicId: 'F-001', note: 'Confirmed independently.' }
+    ])
+
+    expect(getReviewForPr(prId)?.findings[0]).toMatchObject({
+      contributors: ['existing-model', 'claude-reviewer'],
+      description:
+        'F-001 description\n\n[claude-reviewer also flagged this: Confirmed independently.]'
+    })
   })
 
   it('stores a detached snapshot rather than a mutable settings reference', () => {
