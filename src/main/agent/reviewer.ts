@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { complete, type AgentMessage, type ToolDefinition } from '../copilot/client'
+import {
+  complete,
+  type AgentMessage,
+  type ReasoningEffort,
+  type ToolDefinition
+} from '../copilot/client'
 import { callTool, listTools } from '../mcp/adoClient'
 import { getPullRequestContext } from '../mcp/adoService'
 import { logger } from '../logger'
@@ -10,6 +15,7 @@ import type {
   Finding,
   PostedComment,
   ResolutionAssessment,
+  ReviewDepth,
   Skill
 } from '../../shared/types'
 import type { FindingContribution, NewFinding } from '../db/repo'
@@ -153,6 +159,14 @@ export type ProgressFn = (message: string) => void
 
 const MAX_TOOL_ITERATIONS = 12
 
+const REVIEW_PROFILES: Record<
+  ReviewDepth,
+  { maxToolIterations: number; reasoningEffort: ReasoningEffort }
+> = {
+  quick: { maxToolIterations: 6, reasoningEffort: 'low' },
+  intensive: { maxToolIterations: 20, reasoningEffort: 'high' }
+}
+
 // Per-tool-result cap appended to the transcript, so one huge tool response
 // can't blow past the model's prompt-token limit across turns.
 const MAX_TOOL_RESULT_CHARS = 12000
@@ -216,6 +230,21 @@ function buildSkillFocusBlock(skill: Skill | undefined): string {
   )
 }
 
+function buildReviewDepthBlock(depth: ReviewDepth): string {
+  if (depth === 'intensive') {
+    return (
+      '\n\nReview depth: intensive. Inspect every changed file that could affect behavior, ' +
+      'trace relevant call paths and dependencies, and verify assumptions with the available tools. ' +
+      'Look for subtle correctness, security, reliability, and test-coverage issues.'
+    )
+  }
+  return (
+    '\n\nReview depth: quick. Triage the changed files, inspect the highest-risk changes first, ' +
+    'and focus on clear correctness, security, or reliability problems. Avoid exhaustive ' +
+    'exploration of low-risk code.'
+  )
+}
+
 export async function reviewPullRequest(
   adoPrId: number,
   model: string,
@@ -223,8 +252,10 @@ export async function reviewPullRequest(
   onProgress: ProgressFn = () => {},
   priorComments: PostedComment[] = [],
   existingFindings: Finding[] = [],
-  skill?: Skill
+  skill?: Skill,
+  depth: ReviewDepth = 'quick'
 ): Promise<{ findings: NewFinding[]; additions: FindingContribution[]; raw: string }> {
+  const profile = REVIEW_PROFILES[depth]
   onProgress('Gathering pull request context…')
   const context = await getPullRequestContext(adoPrId)
   const tools = await mcpToolsAsDefinitions(skill?.toolAllowlist)
@@ -247,6 +278,7 @@ export async function reviewPullRequest(
       content:
         `Review pull request #${adoPrId}. Here is the context already gathered.\n\n` +
         `${context.summary || '(no details fetched; use tools to gather them)'}` +
+        `${buildReviewDepthBlock(depth)}` +
         `${buildSkillFocusBlock(skill)}` +
         `${buildPriorCommentsBlock(priorComments)}\n\n` +
         `Use the available Azure DevOps tools to inspect changed files as needed, then ` +
@@ -256,9 +288,17 @@ export async function reviewPullRequest(
 
   let finalContent: string | null = null
 
-  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    logger.info(`review pr#${adoPrId}: model turn ${i + 1}/${MAX_TOOL_ITERATIONS}`, { model })
-    const result = await complete({ model, messages, tools })
+  for (let i = 0; i < profile.maxToolIterations; i++) {
+    logger.info(`review pr#${adoPrId}: model turn ${i + 1}/${profile.maxToolIterations}`, {
+      model,
+      depth
+    })
+    const result = await complete({
+      model,
+      messages,
+      tools,
+      reasoningEffort: profile.reasoningEffort
+    })
 
     if (result.toolCalls.length > 0) {
       logger.info(`review pr#${adoPrId}: ${result.toolCalls.length} tool call(s)`, {
@@ -313,7 +353,11 @@ export async function reviewPullRequest(
         'Stop calling tools. Based only on the information already gathered above, ' +
         'produce your final JSON findings report now, in the required format.'
     })
-    const finalResult = await complete({ model, messages })
+    const finalResult = await complete({
+      model,
+      messages,
+      reasoningEffort: profile.reasoningEffort
+    })
     finalContent = finalResult.content ?? ''
   }
 
@@ -329,7 +373,11 @@ export async function reviewPullRequest(
         'Your previous message was not valid JSON. Reply with ONLY the JSON object in the ' +
         'required format — no prose, no explanation, no markdown code fences.'
     })
-    const repair = await complete({ model, messages })
+    const repair = await complete({
+      model,
+      messages,
+      reasoningEffort: profile.reasoningEffort
+    })
     const repaired = repair.content ?? ''
     report = tryParseReport(repaired)
     if (report) finalContent = repaired

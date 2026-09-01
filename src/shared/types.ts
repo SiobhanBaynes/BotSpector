@@ -17,6 +17,8 @@ export type ReviewStatus =
   | 'declined'
   | 'error'
 
+export type ReviewDepth = 'quick' | 'intensive'
+
 export interface Settings {
   adoOrg: string
   adoProject: string
@@ -115,13 +117,32 @@ export interface Review {
   findings: Finding[]
 }
 
-// A per-model summary of a review run on a PR: which findings that model
-// created (raised itself) and which existing findings it "+1'd" (agreed with).
+export interface ReviewSkillSnapshot {
+  id: string
+  name: string
+  description: string
+  source: SkillSource
+  version: string | null
+  instructions: string
+  instructionsOverridden: boolean
+  filePatterns: string[]
+  toolAllowlist: string[]
+}
+
+export interface ReviewRunSettings {
+  depth: ReviewDepth
+  models: string[]
+  skills: ReviewSkillSnapshot[]
+}
+
+// An immutable summary of one review pass: what it found and the exact model,
+// skill configuration, and review options used at the time.
 export interface ReviewSummary {
   id: number
   model: string
   createdAt: string
   reviewedCommit: string | null
+  settings: ReviewRunSettings | null
   createdFindings: string[]
   contributedFindings: string[]
 }

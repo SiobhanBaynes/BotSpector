@@ -164,6 +164,55 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
       SET model = COALESCE((SELECT r.model FROM reviews r WHERE r.id = findings.review_id), '')
       WHERE model = ''
     `)
+  },
+  // v13 -> keep an immutable record of every review pass, including the exact
+  // skill and review options used. The reviews table continues to own the live
+  // findings for each model, while review_runs provides durable history.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS review_runs (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id                INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+        model                TEXT NOT NULL,
+        created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+        reviewed_commit      TEXT NOT NULL DEFAULT '',
+        settings_json        TEXT,
+        created_findings     TEXT NOT NULL DEFAULT '[]',
+        contributed_findings TEXT NOT NULL DEFAULT '[]'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_review_runs_pr ON review_runs(pr_id, created_at DESC, id DESC);
+
+      INSERT INTO review_runs
+        (pr_id, model, created_at, reviewed_commit, settings_json,
+         created_findings, contributed_findings)
+      SELECT
+        r.pr_id,
+        r.model,
+        r.created_at,
+        r.reviewed_commit,
+        NULL,
+        COALESCE(
+          (SELECT json_group_array(f.public_id)
+           FROM findings f
+           WHERE f.review_id = r.id),
+          '[]'
+        ),
+        COALESCE(
+          (SELECT json_group_array(f.public_id)
+           FROM findings f
+           JOIN reviews owner ON owner.id = f.review_id
+           WHERE owner.pr_id = r.pr_id
+             AND COALESCE(f.model, '') <> r.model
+             AND EXISTS (
+               SELECT 1
+               FROM json_each(COALESCE(f.contributors, '[]'))
+               WHERE value = r.model
+             )),
+          '[]'
+        )
+      FROM reviews r;
+    `)
   }
 ]
 

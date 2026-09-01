@@ -378,6 +378,32 @@ a {
 .review-dialog-field > .status-select {
   width: 100%;
 }
+.review-depth-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.review-depth-option {
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.review-depth-option:hover {
+  color: var(--text);
+}
+.review-depth-option.active {
+  background: var(--accent);
+  color: #fff;
+}
 .status-select {
   background: var(--panel-2);
   color: var(--text);
@@ -1008,6 +1034,7 @@ a {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .rh-model {
   font-size: 13px;
@@ -1018,6 +1045,74 @@ a {
 }
 .rh-commit.stale {
   color: var(--medium);
+}
+.review-history-config {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  margin-top: 5px;
+}
+.rh-setting {
+  display: inline-flex;
+  gap: 5px;
+  color: var(--text);
+}
+.rh-setting-label {
+  color: var(--muted);
+}
+.rh-settings-detail {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+.rh-settings-detail > summary,
+.rh-skill-instructions > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent);
+  user-select: none;
+}
+.rh-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 2px 0 3px 10px;
+  border-left: 2px solid var(--border);
+}
+.rh-settings-line {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.rh-skill-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+.rh-skill-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rh-skill-instructions pre {
+  max-height: 240px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .review-history-findings {
   display: flex;
@@ -1405,6 +1500,23 @@ a {
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+.custom-refine {
+  display: flex;
+  flex: 0 1 250px;
+  min-width: 180px;
+  gap: 6px;
+}
+.custom-refine-input {
+  min-width: 0;
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 12px;
 }
 .thread-state {
   display: flex;

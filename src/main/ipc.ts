@@ -17,6 +17,8 @@ import type {
   PullRequest,
   ResolutionAssessment,
   Review,
+  ReviewDepth,
+  ReviewRunSettings,
   ReviewStatus,
   ReviewSummary,
   Settings,
@@ -101,6 +103,10 @@ function resolveModel(override?: string): string {
   const model = (override && override.trim()) || repo.getSetting('model')
   if (!model) throw new Error('No model selected. Choose one in Settings.')
   return model
+}
+
+function resolveReviewDepth(value?: string): ReviewDepth {
+  return value === 'intensive' ? 'intensive' : 'quick'
 }
 
 // Add ourselves as an optional reviewer on a PR — best-effort and non-blocking.
@@ -860,6 +866,8 @@ export function registerIpcHandlers(): void {
     model: string,
     headCommit: string,
     skillId: string,
+    depth: ReviewDepth,
+    reviewModels: string[],
     onProgress: (message: string) => void
   ): Promise<void> {
     const pr = repo.getPullRequest(prId)
@@ -868,6 +876,23 @@ export function registerIpcHandlers(): void {
     if (!skill) throw new Error('No review skill available')
     const override = repo.getSetting(skillOverrideSettingKey(skill.id))
     const instructions = override || skill.instructions
+    const settings: ReviewRunSettings = {
+      depth,
+      models: [...reviewModels],
+      skills: [
+        {
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          source: skill.source,
+          version: skill.version ?? null,
+          instructions,
+          instructionsOverridden: override.length > 0,
+          filePatterns: [...(skill.filePatterns ?? [])],
+          toolAllowlist: [...(skill.toolAllowlist ?? [])]
+        }
+      ]
+    }
     const { findings, additions, raw } = await reviewPullRequest(
       pr.adoPrId,
       model,
@@ -880,13 +905,17 @@ export function registerIpcHandlers(): void {
       (repo.getReviewForPr(prId)?.findings ?? []).filter(
         (f) => f.model !== model || f.comment?.status === 'posted'
       ),
-      skill
+      skill,
+      depth
     )
-    repo.createReview(prId, model, findings, raw, headCommit)
+    repo.createReview(prId, model, findings, raw, headCommit, {
+      settings,
+      contributedFindings: additions.map((addition) => addition.publicId)
+    })
     // Merge this model's contributions into other agents' existing findings.
     repo.applyContributions(prId, model, additions)
     logger.info(
-      `review pass completed for pr id ${prId} (${model}, skill=${skill.id}): ${findings.length} new finding(s), ${additions.length} contribution(s)`
+      `review pass completed for pr id ${prId} (${model}, skill=${skill.id}, depth=${depth}): ${findings.length} new finding(s), ${additions.length} contribution(s)`
     )
   }
 
@@ -910,12 +939,13 @@ export function registerIpcHandlers(): void {
     return headCommit
   }
 
-  ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string, skillIdArg?: string): Promise<IpcResult<Review>> => {
+  ipcMain.handle(IPC.prReview, async (_e, prId: number, modelArg?: string, skillIdArg?: string, depthArg?: string): Promise<IpcResult<Review>> => {
     try {
       const pr = repo.getPullRequest(prId)
       if (!pr) throw new Error('Pull request not found')
       const model = resolveModel(modelArg)
       const skillId = (skillIdArg ?? '').trim() || GENERAL_SKILL_ID
+      const depth = resolveReviewDepth(depthArg)
 
       // Capture the current status/conversation of previously posted comments
       // before this re-review replaces the old findings, so that history is kept.
@@ -928,11 +958,11 @@ export function registerIpcHandlers(): void {
       }
 
       repo.setReviewStatus(prId, 'reviewing')
-      send(IPC.prReviewProgress, { prId, message: 'Starting review…' })
-      logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}, skill ${skillId}`)
+      send(IPC.prReviewProgress, { prId, message: `Starting ${depth} review…` })
+      logger.info(`review started for pr id ${prId} (ADO #${pr.adoPrId}) with model ${model}, skill ${skillId}, depth ${depth}`)
 
       const headCommit = await captureHeadCommit(prId)
-      await runReviewerPass(prId, model, headCommit, skillId, (message) =>
+      await runReviewerPass(prId, model, headCommit, skillId, depth, [model], (message) =>
         send(IPC.prReviewProgress, { prId, message })
       )
       // A fresh review has untriaged (open) findings, so this lands as
@@ -956,7 +986,7 @@ export function registerIpcHandlers(): void {
   // "+1" contributions and only genuinely new issues are added.
   ipcMain.handle(
     IPC.prReviewPanel,
-    async (_e, prId: number, modelsArg: string[], skillIdArg?: string): Promise<IpcResult<Review>> => {
+    async (_e, prId: number, modelsArg: string[], skillIdArg?: string, depthArg?: string): Promise<IpcResult<Review>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
@@ -965,6 +995,7 @@ export function registerIpcHandlers(): void {
           : []
         if (models.length === 0) throw new Error('No reviewers selected.')
         const skillId = (skillIdArg ?? '').trim() || GENERAL_SKILL_ID
+        const depth = resolveReviewDepth(depthArg)
 
         try {
           await syncCommentThreads(prId)
@@ -977,10 +1008,10 @@ export function registerIpcHandlers(): void {
         repo.setReviewStatus(prId, 'reviewing')
         send(IPC.prReviewProgress, {
           prId,
-          message: `Starting panel review with ${models.length} reviewer${models.length === 1 ? '' : 's'}…`
+          message: `Starting ${depth} panel review with ${models.length} reviewer${models.length === 1 ? '' : 's'}…`
         })
         logger.info(
-          `panel review started for pr id ${prId} (ADO #${pr.adoPrId}) with models: ${models.join(', ')}, skill ${skillId}`
+          `panel review started for pr id ${prId} (ADO #${pr.adoPrId}) with models: ${models.join(', ')}, skill ${skillId}, depth ${depth}`
         )
 
         const headCommit = await captureHeadCommit(prId)
@@ -990,7 +1021,7 @@ export function registerIpcHandlers(): void {
           const prefix = `Reviewer ${i + 1}/${models.length} · ${model}`
           send(IPC.prReviewProgress, { prId, message: `${prefix} · starting…` })
           try {
-            await runReviewerPass(prId, model, headCommit, skillId, (message) =>
+            await runReviewerPass(prId, model, headCommit, skillId, depth, models, (message) =>
               send(IPC.prReviewProgress, { prId, message: `${prefix} · ${message}` })
             )
           } catch (e) {

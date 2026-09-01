@@ -31,6 +31,14 @@ npm run build    # production bundle
 npm run package  # build a distributable (electron-builder)
 ```
 
+## Test
+
+```bash
+npm test              # run the unit suite once
+npm run test:watch    # rerun affected tests while editing
+npm run typecheck     # check main, renderer, and test TypeScript
+```
+
 ## First-time setup (in the app)
 
 1. Open **Settings**.

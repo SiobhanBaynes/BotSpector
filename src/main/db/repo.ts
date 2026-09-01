@@ -8,6 +8,8 @@ import type {
   PostedComment,
   PullRequest,
   Review,
+  ReviewRunSettings,
+  ReviewSkillSnapshot,
   ReviewStatus,
   ReviewSummary
 } from '../../shared/types'
@@ -389,6 +391,11 @@ export interface FindingContribution {
   note: string
 }
 
+export interface ReviewRunInput {
+  settings: ReviewRunSettings
+  contributedFindings: string[]
+}
+
 /**
  * Store a model's review of a PR. Reviews accumulate per model: re-running the
  * SAME model replaces only its own findings, while other models' findings (and
@@ -402,7 +409,8 @@ export function createReview(
   model: string,
   findings: NewFinding[],
   rawResponse: string,
-  reviewedCommit = ''
+  reviewedCommit = '',
+  run?: ReviewRunInput
 ): number {
   const db = getDb()
   const tx = db.transaction(() => {
@@ -466,9 +474,26 @@ export function createReview(
       `INSERT INTO findings(review_id, public_id, bucket, title, description, file_path, line, model, contributors)
        VALUES(@reviewId, @publicId, @bucket, @title, @description, @filePath, @line, @model, '[]')`
     )
+    const createdFindingIds: string[] = []
     for (const f of findings) {
       const publicId = f.publicId && !used.has(f.publicId) ? (used.add(f.publicId), f.publicId) : nextId()
       insert.run({ reviewId, ...f, publicId, model })
+      createdFindingIds.push(publicId)
+    }
+
+    if (run) {
+      db.prepare(
+        `INSERT INTO review_runs
+          (pr_id, model, reviewed_commit, settings_json, created_findings, contributed_findings)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        prId,
+        model,
+        reviewedCommit,
+        JSON.stringify(run.settings),
+        JSON.stringify(createdFindingIds),
+        JSON.stringify(run.contributedFindings)
+      )
     }
     return reviewId
   })
@@ -714,57 +739,103 @@ export function getReviewForPr(prId: number): Review | null {
 }
 
 /**
- * Summarise every review run on a PR: one entry per model, newest first, listing
- * the findings that model created (raised itself) and the existing findings it
- * "+1'd" (agreed with via a contribution). Lets the UI show a history of which
- * models reviewed and what each one contributed.
+ * List every immutable review pass on a PR, newest first, including its
+ * configuration snapshot and findings attribution.
  */
 export function listReviewSummaries(prId: number): ReviewSummary[] {
   const db = getDb()
-  const reviews = db
+  const runs = db
     .prepare(
-      `SELECT id, model, created_at, reviewed_commit
-       FROM reviews WHERE pr_id = ? ORDER BY created_at DESC`
+      `SELECT id, model, created_at, reviewed_commit, settings_json,
+              created_findings, contributed_findings
+       FROM review_runs
+       WHERE pr_id = ?
+       ORDER BY created_at DESC, id DESC`
     )
     .all(prId) as Array<{
     id: number
     model: string
     created_at: string
     reviewed_commit: string | null
+    settings_json: string | null
+    created_findings: string | null
+    contributed_findings: string | null
   }>
 
-  // All findings on the PR, with their creator model and contributor list, so we
-  // can attribute created vs. contributed per model without extra queries.
-  const findingRows = db
-    .prepare(
-      `SELECT f.public_id AS publicId, f.model AS model, f.contributors AS contributors
-       FROM findings f JOIN reviews r ON r.id = f.review_id
-       WHERE r.pr_id = ?
-       ORDER BY f.id ASC`
-    )
-    .all(prId) as Array<{ publicId: string; model: string | null; contributors: string | null }>
-
-  const parsed = findingRows.map((f) => {
-    let contributors: string[] = []
+  const parseStringArray = (value: string | null): string[] => {
     try {
-      const arr = JSON.parse(f.contributors ?? '[]')
-      if (Array.isArray(arr)) contributors = arr.filter((m): m is string => typeof m === 'string')
+      const parsed = JSON.parse(value ?? '[]')
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string')
+        : []
     } catch {
-      contributors = []
+      return []
     }
-    return { publicId: f.publicId, model: f.model ?? '', contributors }
-  })
+  }
 
-  return reviews.map((r) => ({
-    id: r.id,
-    model: r.model,
-    createdAt: r.created_at,
-    reviewedCommit: r.reviewed_commit ?? null,
-    createdFindings: parsed.filter((f) => f.model === r.model).map((f) => f.publicId),
-    contributedFindings: parsed
-      .filter((f) => f.model !== r.model && f.contributors.includes(r.model))
-      .map((f) => f.publicId)
-  }))
+  const parseSettings = (value: string | null): ReviewRunSettings | null => {
+    if (!value) return null
+    try {
+      const parsed = JSON.parse(value) as Record<string, unknown>
+      if (!parsed || typeof parsed !== 'object') return null
+      if (parsed.depth !== 'quick' && parsed.depth !== 'intensive') return null
+      if (!Array.isArray(parsed.models) || !parsed.models.every((model) => typeof model === 'string')) {
+        return null
+      }
+      if (!Array.isArray(parsed.skills)) return null
+
+      const skills: ReviewSkillSnapshot[] = []
+      for (const value of parsed.skills) {
+        if (!value || typeof value !== 'object') return null
+        const skill = value as Record<string, unknown>
+        if (
+          typeof skill.id !== 'string' ||
+          typeof skill.name !== 'string' ||
+          typeof skill.instructions !== 'string' ||
+          (skill.source !== 'builtin' && skill.source !== 'user')
+        ) {
+          return null
+        }
+        const filePatterns = Array.isArray(skill.filePatterns)
+          ? skill.filePatterns.filter((pattern): pattern is string => typeof pattern === 'string')
+          : []
+        const toolAllowlist = Array.isArray(skill.toolAllowlist)
+          ? skill.toolAllowlist.filter((tool): tool is string => typeof tool === 'string')
+          : []
+        skills.push({
+          id: skill.id,
+          name: skill.name,
+          description: typeof skill.description === 'string' ? skill.description : '',
+          source: skill.source,
+          version: typeof skill.version === 'string' ? skill.version : null,
+          instructions: skill.instructions,
+          instructionsOverridden: skill.instructionsOverridden === true,
+          filePatterns,
+          toolAllowlist
+        })
+      }
+
+      return {
+        depth: parsed.depth,
+        models: [...parsed.models],
+        skills
+      }
+    } catch {
+      return null
+    }
+  }
+
+  return runs.map((run) => {
+    return {
+      id: run.id,
+      model: run.model,
+      createdAt: run.created_at,
+      reviewedCommit: run.reviewed_commit ?? null,
+      settings: parseSettings(run.settings_json),
+      createdFindings: parseStringArray(run.created_findings),
+      contributedFindings: parseStringArray(run.contributed_findings)
+    }
+  })
 }
 
 export function getFinding(findingId: number): Finding | null {

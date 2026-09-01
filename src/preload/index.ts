@@ -16,6 +16,7 @@ import type {
   PullRequest,
   ResolutionAssessment,
   Review,
+  ReviewDepth,
   ReviewStatus,
   ReviewSummary,
   Settings,
@@ -141,15 +142,17 @@ const api = {
   reviewPullRequest: (
     prId: number,
     model?: string,
-    skillId?: string
+    skillId?: string,
+    depth?: ReviewDepth
   ): Promise<IpcResult<Review>> =>
-    ipcRenderer.invoke(IPC.prReview, prId, model, skillId),
+    ipcRenderer.invoke(IPC.prReview, prId, model, skillId, depth),
   reviewPullRequestPanel: (
     prId: number,
     models: string[],
-    skillId?: string
+    skillId?: string,
+    depth?: ReviewDepth
   ): Promise<IpcResult<Review>> =>
-    ipcRenderer.invoke(IPC.prReviewPanel, prId, models, skillId),
+    ipcRenderer.invoke(IPC.prReviewPanel, prId, models, skillId, depth),
   onReviewProgress: (cb: (p: ReviewProgress) => void): (() => void) => {
     const handler = (_e: unknown, payload: ReviewProgress): void => cb(payload)
     ipcRenderer.on(IPC.prReviewProgress, handler)

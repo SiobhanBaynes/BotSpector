@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { CodeSnippet, Finding, FindingStatus, ResolutionAssessment } from '../../../shared/types'
 import { Markdown } from './Markdown'
 
@@ -76,6 +76,7 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAb
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [commentText, setCommentText] = useState(finding.comment?.draftText ?? '')
+  const [customRefinement, setCustomRefinement] = useState('')
   const [code, setCode] = useState<CodeSnippet | null>(null)
   const [showCode, setShowCode] = useState(false)
   const [resolution, setResolution] = useState<ResolutionAssessment | null>(null)
@@ -147,6 +148,13 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAb
       setCommentText(res.data)
       await onChanged()
     })
+  }
+
+  function submitCustomRefinement(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault()
+    const instruction = customRefinement.trim()
+    if (!instruction || busy !== null) return
+    void refine('custom', instruction)
   }
 
   async function saveEdit(): Promise<void> {
@@ -368,6 +376,25 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAb
                         {busy === `refine-${r.key}` ? '…' : r.label}
                       </button>
                     ))}
+                    <form className="custom-refine" onSubmit={submitCustomRefinement}>
+                      <input
+                        className="custom-refine-input"
+                        type="text"
+                        value={customRefinement}
+                        onChange={(e) => setCustomRefinement(e.target.value)}
+                        placeholder="Other instruction"
+                        aria-label="Custom redraft instruction"
+                        maxLength={160}
+                        disabled={busy !== null}
+                      />
+                      <button
+                        className="btn subtle small-btn"
+                        type="submit"
+                        disabled={busy !== null || customRefinement.trim().length === 0}
+                      >
+                        {busy === 'refine-custom' ? '…' : 'Apply'}
+                      </button>
+                    </form>
                     <span className="spacer" />
                     <button className="btn" onClick={saveEdit} disabled={busy !== null || !dirty}>
                       {busy === 'save' ? '…' : 'Save edits'}

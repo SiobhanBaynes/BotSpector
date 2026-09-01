@@ -3,6 +3,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { secrets } from '../secrets'
 import { getSetting } from '../db/repo'
 import { getNpxCommand } from '../fixPath'
+import {
+  buildArgs as buildToolArgs,
+  parseJsonFromText as parseToolJson,
+  type McpTool
+} from './toolUtils'
+
+export type { McpTool } from './toolUtils'
 
 /**
  * Manages the connection to the official Azure DevOps MCP server
@@ -12,16 +19,6 @@ import { getNpxCommand } from '../fixPath'
  * and call specific tools directly for deterministic, non-agent operations
  * (like listing pull requests).
  */
-
-export interface McpTool {
-  name: string
-  description: string
-  inputSchema: {
-    type: 'object'
-    properties?: Record<string, unknown>
-    required?: string[]
-  }
-}
 
 let client: Client | null = null
 let transport: StdioClientTransport | null = null
@@ -172,44 +169,13 @@ export async function findTool(...substrings: string[]): Promise<McpTool | null>
   )
 }
 
-/**
- * Build an argument object for a tool, only including keys the tool actually
- * declares in its input schema (defensive against version differences).
- */
 export function buildArgs(
   tool: McpTool,
   values: Record<string, unknown>
 ): Record<string, unknown> {
-  const props = tool.inputSchema.properties ?? {}
-  const args: Record<string, unknown> = {}
-  for (const [key, val] of Object.entries(values)) {
-    if (val !== undefined && val !== null && key in props) {
-      args[key] = val
-    }
-  }
-  return args
+  return buildToolArgs(tool, values)
 }
 
-/** Extract a JSON value from a tool's text output, tolerating surrounding prose. */
 export function parseJsonFromText(text: string): unknown {
-  const trimmed = text.trim()
-  try {
-    return JSON.parse(trimmed)
-  } catch {
-    // fall through to bracket extraction
-  }
-  const firstArr = trimmed.indexOf('[')
-  const firstObj = trimmed.indexOf('{')
-  const start =
-    firstArr === -1 ? firstObj : firstObj === -1 ? firstArr : Math.min(firstArr, firstObj)
-  if (start === -1) return null
-  const open = trimmed[start]
-  const close = open === '[' ? ']' : '}'
-  const end = trimmed.lastIndexOf(close)
-  if (end <= start) return null
-  try {
-    return JSON.parse(trimmed.slice(start, end + 1))
-  } catch {
-    return null
-  }
+  return parseToolJson(text)
 }

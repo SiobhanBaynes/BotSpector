@@ -42,11 +42,14 @@ export interface CompletionResult {
   toolCalls: ToolCall[]
 }
 
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
 export interface CompleteOptions {
   model: string
   messages: AgentMessage[]
   tools?: ToolDefinition[]
   temperature?: number
+  reasoningEffort?: ReasoningEffort
 }
 
 // Remember which endpoint a model needs so we don't re-probe every call.
@@ -136,6 +139,7 @@ async function callChat(opts: CompleteOptions): Promise<CompletionResult> {
     messages,
     temperature: opts.temperature ?? 0.1
   }
+  if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort
   if (opts.tools && opts.tools.length > 0) {
     body.tools = opts.tools.map((t) => ({
       type: 'function',
@@ -151,6 +155,10 @@ async function callChat(opts: CompleteOptions): Promise<CompletionResult> {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
+    if (opts.reasoningEffort && res.status === 400 && /reasoning|effort/i.test(text)) {
+      logger.warn(`copilot: model ${opts.model} rejected reasoning effort; retrying without it`)
+      return callChat({ ...opts, reasoningEffort: undefined })
+    }
     throw new Error(`Copilot chat failed (${res.status}): ${text.slice(0, 500)}`)
   }
   const data = (await res.json()) as ChatCompletionResponse
@@ -204,6 +212,7 @@ async function callResponses(opts: CompleteOptions): Promise<CompletionResult> {
   }
 
   const body: Record<string, unknown> = { model: opts.model, input, stream: false }
+  if (opts.reasoningEffort) body.reasoning = { effort: opts.reasoningEffort }
   if (opts.tools && opts.tools.length > 0) {
     body.tools = opts.tools.map((t) => ({
       type: 'function',
@@ -221,6 +230,10 @@ async function callResponses(opts: CompleteOptions): Promise<CompletionResult> {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
+    if (opts.reasoningEffort && res.status === 400 && /reasoning|effort/i.test(text)) {
+      logger.warn(`copilot: model ${opts.model} rejected reasoning effort; retrying without it`)
+      return callResponses({ ...opts, reasoningEffort: undefined })
+    }
     throw new Error(`Copilot responses failed (${res.status}): ${text.slice(0, 500)}`)
   }
   const data = (await res.json()) as ResponsesResponse

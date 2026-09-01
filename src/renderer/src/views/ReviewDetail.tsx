@@ -8,6 +8,7 @@ import type {
   PinnedChange,
   PullRequest,
   Review,
+  ReviewDepth,
   ReviewStatus,
   ReviewSummary,
   Skill
@@ -25,10 +26,11 @@ interface Props {
   onBack: () => void
 }
 
-// localStorage keys for the remembered review-dialog choice (skill + models),
+// localStorage keys for the remembered review-dialog choices,
 // so a preference carries across PRs until the user resets it.
 const REVIEW_MODELS_KEY = 'botspector.reviewModels'
 const REVIEW_SKILL_KEY = 'botspector.reviewSkill'
+const REVIEW_DEPTH_KEY = 'botspector.reviewDepth'
 
 type StatusFilter = 'all' | FindingStatus
 type Tab = 'review' | 'files' | 'comments' | 'chat'
@@ -46,6 +48,13 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
       return localStorage.getItem(REVIEW_SKILL_KEY) || 'general'
     } catch {
       return 'general'
+    }
+  })
+  const [reviewDepth, setReviewDepth] = useState<ReviewDepth>(() => {
+    try {
+      return localStorage.getItem(REVIEW_DEPTH_KEY) === 'intensive' ? 'intensive' : 'quick'
+    } catch {
+      return 'quick'
     }
   })
   const [reviewing, setReviewing] = useState(false)
@@ -186,7 +195,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   }, [prId, load])
 
   async function runReviewFromDialog(): Promise<void> {
-    await runReview(Array.from(dialogModels), selectedSkillId)
+    await runReview(Array.from(dialogModels), selectedSkillId, reviewDepth)
   }
 
   // Run a review directly with the default model (the split button's main
@@ -194,17 +203,22 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   async function runDefaultReview(): Promise<void> {
     const model = defaultModel || models[0]?.id
     if (!model) return
-    await runReview([model], selectedSkillId)
+    await runReview([model], selectedSkillId, reviewDepth)
   }
 
   // Shared review execution used by both the split button's main action and the
   // options dialog. `chosen` with more than one model runs a panel review.
-  async function runReview(chosen: string[], skillId: string): Promise<void> {
+  async function runReview(
+    chosen: string[],
+    skillId: string,
+    depth: ReviewDepth
+  ): Promise<void> {
     if (chosen.length === 0) return
     // Remember this choice so it carries across PRs (reset restores defaults).
     try {
       localStorage.setItem(REVIEW_MODELS_KEY, JSON.stringify(chosen))
       localStorage.setItem(REVIEW_SKILL_KEY, skillId)
+      localStorage.setItem(REVIEW_DEPTH_KEY, depth)
     } catch {
       // ignore storage failures
     }
@@ -214,12 +228,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     const isPanel = chosen.length > 1
     setProgress(
       isPanel
-        ? `Starting panel review (${chosen.length} reviewers)…`
-        : 'Starting…'
+        ? `Starting ${depth} panel review (${chosen.length} reviewers)…`
+        : `Starting ${depth} review…`
     )
     const res = isPanel
-      ? await window.api.reviewPullRequestPanel(prId, chosen, skillId)
-      : await window.api.reviewPullRequest(prId, chosen[0], skillId)
+      ? await window.api.reviewPullRequestPanel(prId, chosen, skillId, depth)
+      : await window.api.reviewPullRequest(prId, chosen[0], skillId, depth)
     setReviewing(false)
     setProgress('')
     if (res.ok) setReview(res.data)
@@ -253,10 +267,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   // model, clearing any remembered choice.
   function resetReviewDialog(): void {
     setSelectedSkillId('general')
+    setReviewDepth('quick')
     setDialogModels(new Set(defaultModel ? [defaultModel] : []))
     try {
       localStorage.removeItem(REVIEW_MODELS_KEY)
       localStorage.removeItem(REVIEW_SKILL_KEY)
+      localStorage.removeItem(REVIEW_DEPTH_KEY)
     } catch {
       // ignore storage failures
     }
@@ -427,6 +443,8 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
           skills={skills}
           selectedSkillId={selectedSkillId}
           onSkillChange={setSelectedSkillId}
+          reviewDepth={reviewDepth}
+          onReviewDepthChange={setReviewDepth}
           reviewedModels={new Set(reviewHistory.map((r) => r.model))}
           hasReview={!!review}
           isReviewing={isReviewing}
@@ -689,8 +707,8 @@ function FilterChip({
   )
 }
 
-// A history of every model that has reviewed this PR, showing which findings it
-// raised itself and which existing findings it agreed with (+1'd).
+// Immutable review-pass history, including the model, findings attribution, and
+// the exact skill configuration and options used at the time.
 function ReviewHistory({
   history,
   headCommit
@@ -707,6 +725,8 @@ function ReviewHistory({
         {history.map((r) => {
           const commit = r.reviewedCommit ?? ''
           const onOldCommit = !!commit && !!headCommit && commit !== headCommit
+          const settings = r.settings
+          const reviewSkills = settings?.skills ?? []
           return (
             <div key={r.id} className="review-history-row">
               <div className="review-history-head">
@@ -728,6 +748,74 @@ function ReviewHistory({
                   <span className="muted small">commit n/a</span>
                 )}
               </div>
+              {settings ? (
+                <div className="review-history-config small">
+                  <span className="rh-setting">
+                    <span className="rh-setting-label">Depth</span>
+                    {capitalize(settings.depth)}
+                  </span>
+                  <span className="rh-setting">
+                    <span className="rh-setting-label">
+                      {reviewSkills.length === 1 ? 'Skill' : 'Skills'}
+                    </span>
+                    {reviewSkills.length > 0
+                      ? reviewSkills.map((skill) => skill.name).join(', ')
+                      : 'None'}
+                  </span>
+                  {settings.models.length > 1 && (
+                    <span className="rh-setting">
+                      <span className="rh-setting-label">Panel</span>
+                      {settings.models.length} models
+                    </span>
+                  )}
+                  <details className="rh-settings-detail">
+                    <summary>Settings used</summary>
+                    <div className="rh-settings-body">
+                      <div className="rh-settings-line">
+                        <span className="rh-setting-label">Models</span>
+                        <span className="mono">{settings.models.join(', ')}</span>
+                      </div>
+                      <div className="rh-settings-line">
+                        <span className="rh-setting-label">Review depth</span>
+                        <span>{capitalize(settings.depth)}</span>
+                      </div>
+                      {reviewSkills.map((skill) => (
+                        <div key={skill.id} className="rh-skill-detail">
+                          <div className="rh-skill-head">
+                            <strong>{skill.name}</strong>
+                            <span className="muted">
+                              {skill.source === 'builtin' ? 'Built-in' : 'Imported'}
+                              {skill.version ? ` · v${skill.version}` : ''}
+                              {skill.instructionsOverridden ? ' · customized' : ''}
+                            </span>
+                          </div>
+                          <div className="muted">{skill.description}</div>
+                          {skill.filePatterns.length > 0 && (
+                            <div className="rh-settings-line">
+                              <span className="rh-setting-label">File patterns</span>
+                              <span className="mono">{skill.filePatterns.join(', ')}</span>
+                            </div>
+                          )}
+                          {skill.toolAllowlist.length > 0 && (
+                            <div className="rh-settings-line">
+                              <span className="rh-setting-label">Allowed tools</span>
+                              <span className="mono">{skill.toolAllowlist.join(', ')}</span>
+                            </div>
+                          )}
+                          <details className="rh-skill-instructions">
+                            <summary>Instructions used</summary>
+                            <pre>{skill.instructions}</pre>
+                          </details>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              ) : (
+                <div className="muted small review-history-config">
+                  Settings were not recorded for this legacy review.
+                </div>
+              )}
               <div className="review-history-findings small">
                 <span className="rh-label">Raised:</span>
                 {r.createdFindings.length > 0 ? (
@@ -777,6 +865,8 @@ function ReviewDialog({
   skills,
   selectedSkillId,
   onSkillChange,
+  reviewDepth,
+  onReviewDepthChange,
   reviewedModels,
   hasReview,
   isReviewing,
@@ -794,6 +884,8 @@ function ReviewDialog({
   skills: Skill[]
   selectedSkillId: string
   onSkillChange: (id: string) => void
+  reviewDepth: ReviewDepth
+  onReviewDepthChange: (depth: ReviewDepth) => void
   reviewedModels: Set<string>
   hasReview: boolean
   isReviewing: boolean
@@ -813,16 +905,16 @@ function ReviewDialog({
           className="btn primary split-main"
           onClick={() => void onRunDefault()}
           disabled={isReviewing || noModels}
-          title="Review with the default model. Use the arrow to choose a skill or other models."
+          title={`Run a ${reviewDepth} review with the default model. Use the arrow to change review options.`}
         >
           {isReviewing ? (
             <>
               <span className="spinner" /> Reviewing…
             </>
           ) : hasReview ? (
-            'Re-review'
+            `${capitalize(reviewDepth)} re-review`
           ) : (
-            'Review this PR'
+            `${capitalize(reviewDepth)} review`
           )}
         </button>
         <button
@@ -832,7 +924,7 @@ function ReviewDialog({
           aria-haspopup="menu"
           aria-expanded={open}
           aria-label="Change review options"
-          title="Choose a skill and one or more models"
+          title="Choose review depth, skill, and one or more models"
         >
           <span aria-hidden="true">▾</span>
         </button>
@@ -844,9 +936,34 @@ function ReviewDialog({
             <div className="panel-review-head">
               <strong>Review this PR</strong>
               <p className="muted small">
-                Pick a skill and one or more models. Several models run as a panel: overlapping
-                findings become “+1” contributions on the existing ones; unique issues get added.
+                Pick a review depth, skill, and one or more models. Several models run as a panel.
               </p>
+            </div>
+
+            <div className="review-dialog-field">
+              <span className="muted small">Review depth</span>
+              <div className="review-depth-options" role="radiogroup" aria-label="Review depth">
+                <button
+                  type="button"
+                  className={`review-depth-option${reviewDepth === 'quick' ? ' active' : ''}`}
+                  role="radio"
+                  aria-checked={reviewDepth === 'quick'}
+                  title="Faster pass focused on high-risk changes and clear issues"
+                  onClick={() => onReviewDepthChange('quick')}
+                >
+                  Quick
+                </button>
+                <button
+                  type="button"
+                  className={`review-depth-option${reviewDepth === 'intensive' ? ' active' : ''}`}
+                  role="radio"
+                  aria-checked={reviewDepth === 'intensive'}
+                  title="Deeper pass with high reasoning effort and a larger inspection budget"
+                  onClick={() => onReviewDepthChange('intensive')}
+                >
+                  Intensive
+                </button>
+              </div>
             </div>
 
             <label className="review-dialog-field">
