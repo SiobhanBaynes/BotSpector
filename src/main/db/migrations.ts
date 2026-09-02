@@ -282,6 +282,19 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
     for (const repositoryKey of repositoryKeys) {
       assignProfile.run(profileId, repositoryKey.repo)
     }
+  },
+  // v15 -> scope the Azure DevOps display identity to each repository profile.
+  // Existing profiles inherit the legacy global identity so upgrades preserve
+  // the current PR ownership and filtering behavior.
+  (db) => {
+    db.exec(`ALTER TABLE repository_profiles ADD COLUMN my_identity TEXT NOT NULL DEFAULT ''`)
+    db.exec(`
+      UPDATE repository_profiles
+      SET my_identity = COALESCE(
+        (SELECT value FROM settings WHERE key = 'myIdentity'),
+        ''
+      )
+    `)
   }
 ]
 

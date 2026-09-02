@@ -25,6 +25,7 @@ export interface RepositoryProfile {
   adoOrg: string
   adoProject: string
   adoRepo: string
+  myIdentity: string
 }
 
 export interface RepositoryProfileSummary extends RepositoryProfile {
@@ -36,6 +37,7 @@ export interface RepositoryProfileInput {
   adoOrg: string
   adoProject: string
   adoRepo: string
+  myIdentity: string
   pat?: string
 }
 

@@ -155,7 +155,8 @@ async function syncCommentThreads(prId: number): Promise<void> {
 }
 
 function readSettings(): Settings {
-  const activeRepositoryProfileId = repo.getActiveRepositoryProfile()?.id ?? null
+  const activeRepositoryProfile = repo.getActiveRepositoryProfile()
+  const activeRepositoryProfileId = activeRepositoryProfile?.id ?? null
   return {
     adoOrg: repo.getSetting('adoOrg'),
     adoProject: repo.getSetting('adoProject'),
@@ -166,7 +167,7 @@ function readSettings(): Settings {
     })),
     activeRepositoryProfileId,
     model: repo.getSetting('model'),
-    myIdentity: repo.getSetting('myIdentity'),
+    myIdentity: activeRepositoryProfile?.myIdentity ?? '',
     hasAdoPat: !!secrets.getAdoPat(activeRepositoryProfileId),
     copilotConnected: auth.isSignedIn()
   }
@@ -204,10 +205,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.settingsSave,
-    (_e, partial: Partial<Pick<Settings, 'model' | 'myIdentity'>>): IpcResult<Settings> => {
+    (_e, partial: Partial<Pick<Settings, 'model'>>): IpcResult<Settings> => {
       try {
         if (partial.model !== undefined) repo.setSetting('model', partial.model)
-        if (partial.myIdentity !== undefined) repo.setSetting('myIdentity', partial.myIdentity)
         return ok(readSettings())
       } catch (e) {
         return fail(e)
@@ -260,11 +260,10 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(IPC.detectIdentity, async (): Promise<IpcResult<string>> => {
+  ipcMain.handle(IPC.detectIdentity, async (_e, profileId: string): Promise<IpcResult<string>> => {
     try {
-      const name = await fetchCurrentUserDisplayName()
+      const name = await repo.withRepositoryProfile(profileId, fetchCurrentUserDisplayName)
       if (!name) throw new Error('Could not determine your Azure DevOps display name')
-      repo.setSetting('myIdentity', name)
       return ok(name)
     } catch (e) {
       return fail(e)

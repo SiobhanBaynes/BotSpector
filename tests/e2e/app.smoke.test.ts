@@ -34,6 +34,7 @@ test('launches the BotSpector desktop shell', async () => {
     await editor.getByLabel('Organization').fill('contoso')
     await editor.getByLabel('Project').fill('DillonWay')
     await editor.getByLabel('Repository').fill('web-app')
+    await editor.getByLabel('Your identity').fill('Siobhan Web')
     await editor.getByLabel('Personal Access Token').fill('web-credential-for-smoke-test')
     await editor.getByRole('button', { name: 'Save repository' }).click()
 
@@ -46,8 +47,10 @@ test('launches the BotSpector desktop shell', async () => {
     await expect(window.locator('.repository-profile-editor')).toHaveCount(0)
 
     const webProfile = window.locator('.repository-profile-item').filter({ hasText: 'Web' })
+    await expect(webProfile.locator('.repository-profile-details')).toContainText('Siobhan Web')
     await webProfile.getByRole('button', { name: 'Edit' }).click()
     await expect(webProfile.locator('.repository-profile-editor')).toBeVisible()
+    await expect(webProfile.getByLabel('Your identity')).toHaveValue('Siobhan Web')
     await webProfile.getByRole('button', { name: 'Close' }).click()
     await expect(webProfile.locator('.repository-profile-editor')).toHaveCount(0)
 
@@ -57,12 +60,20 @@ test('launches the BotSpector desktop shell', async () => {
     await editor.getByLabel('Organization').fill('contoso')
     await editor.getByLabel('Project').fill('DillonWay')
     await editor.getByLabel('Repository').fill('api')
+    await editor.getByLabel('Your identity').fill('Siobhan API')
     await editor.getByLabel('Personal Access Token').fill('api-credential-for-smoke-test')
     await editor.getByRole('button', { name: 'Save repository' }).click()
 
     await expect(repositorySelector.locator('option')).toHaveText(['API', 'Web'])
     await repositorySelector.selectOption({ label: 'API' })
     await expect(repositorySelector.locator('option:checked')).toHaveText('API')
+
+    const apiProfile = window.locator('.repository-profile-item').filter({ hasText: 'API' })
+    await apiProfile.getByRole('button', { name: 'Edit' }).click()
+    await expect(apiProfile.getByLabel('Your identity')).toHaveValue('Siobhan API')
+    await apiProfile.getByRole('button', { name: 'Close' }).click()
+    await webProfile.getByRole('button', { name: 'Edit' }).click()
+    await expect(webProfile.getByLabel('Your identity')).toHaveValue('Siobhan Web')
   } finally {
     await app.close()
     rmSync(userDataDir, { recursive: true, force: true })

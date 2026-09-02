@@ -43,9 +43,8 @@ export interface LoginStatus {
 const api = {
   // settings
   getSettings: (): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.settingsGet),
-  saveSettings: (
-    partial: Partial<Pick<Settings, 'model' | 'myIdentity'>>
-  ): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.settingsSave, partial),
+  saveSettings: (partial: Partial<Pick<Settings, 'model'>>): Promise<IpcResult<Settings>> =>
+    ipcRenderer.invoke(IPC.settingsSave, partial),
   saveRepositoryProfile: (
     profileId: string | null,
     input: RepositoryProfileInput
@@ -55,7 +54,8 @@ const api = {
     ipcRenderer.invoke(IPC.repositoryProfileSelect, profileId),
   deleteRepositoryProfile: (profileId: string): Promise<IpcResult<Settings>> =>
     ipcRenderer.invoke(IPC.repositoryProfileDelete, profileId),
-  detectIdentity: (): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.detectIdentity),
+  detectIdentity: (profileId: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.detectIdentity, profileId),
 
   // copilot
   copilotStartLogin: (): Promise<IpcResult<DeviceCodeInfo>> =>

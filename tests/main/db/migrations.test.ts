@@ -59,7 +59,7 @@ describe('runMigrations', () => {
   it('migrates a fresh database to the latest version', () => {
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(14)
+    expect(database.pragma('user_version', { simple: true })).toBe(15)
   })
 
   it('creates every application table', () => {
@@ -124,7 +124,16 @@ describe('runMigrations', () => {
     ],
     [
       'repository_profiles',
-      ['id', 'nickname', 'ado_org', 'ado_project', 'ado_repo', 'created_at', 'archived_at']
+      [
+        'id',
+        'nickname',
+        'ado_org',
+        'ado_project',
+        'ado_repo',
+        'created_at',
+        'archived_at',
+        'my_identity'
+      ]
     ],
     [
       'findings',
@@ -227,7 +236,7 @@ describe('runMigrations', () => {
     expect(database.prepare('SELECT value FROM settings WHERE key = ?').pluck().get('theme')).toBe(
       'dark'
     )
-    expect(database.pragma('user_version', { simple: true })).toBe(14)
+    expect(database.pragma('user_version', { simple: true })).toBe(15)
   })
 
   it('does not downgrade a database with a newer schema version', () => {
@@ -296,7 +305,7 @@ describe('runMigrations', () => {
 
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(14)
+    expect(database.pragma('user_version', { simple: true })).toBe(15)
     expect(database.prepare('SELECT * FROM posted_comments').get()).toMatchObject({
       pr_id: 1,
       ado_thread_id: 400,
@@ -344,7 +353,8 @@ describe('runMigrations', () => {
       INSERT INTO settings (key, value) VALUES
         ('adoOrg', 'contoso'),
         ('adoProject', 'DillonWay'),
-        ('adoRepo', 'web-app');
+        ('adoRepo', 'web-app'),
+        ('myIdentity', 'Siobhan Legacy');
       INSERT INTO pull_requests (id, ado_pr_id, repo) VALUES (1, 42, 'web-app');
       INSERT INTO reviews (id, pr_id) VALUES (10, 1);
       PRAGMA user_version = 13;
@@ -358,12 +368,14 @@ describe('runMigrations', () => {
       ado_org: string
       ado_project: string
       ado_repo: string
+      my_identity: string
     }
     expect(profile).toMatchObject({
       nickname: 'web-app',
       ado_org: 'contoso',
       ado_project: 'DillonWay',
-      ado_repo: 'web-app'
+      ado_repo: 'web-app',
+      my_identity: 'Siobhan Legacy'
     })
     expect(profile.id).toMatch(/^[0-9a-f-]{36}$/)
     expect(
@@ -376,7 +388,41 @@ describe('runMigrations', () => {
       profile.id
     )
     expect(database.prepare('SELECT pr_id FROM reviews WHERE id = 10').pluck().get()).toBe(1)
-    expect(database.pragma('user_version', { simple: true })).toBe(14)
+    expect(database.pragma('user_version', { simple: true })).toBe(15)
+  })
+
+  it('copies the legacy identity to every repository profile when upgrading version 14', () => {
+    database.exec(`
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE repository_profiles (
+        id          TEXT PRIMARY KEY,
+        nickname    TEXT NOT NULL,
+        ado_org     TEXT NOT NULL,
+        ado_project TEXT NOT NULL,
+        ado_repo    TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        archived_at TEXT
+      );
+
+      INSERT INTO settings (key, value) VALUES ('myIdentity', 'Siobhan Legacy');
+      INSERT INTO repository_profiles (id, nickname, ado_org, ado_project, ado_repo) VALUES
+        ('web', 'Web', 'contoso', 'DillonWay', 'web-app'),
+        ('api', 'API', 'contoso', 'DillonWay', 'api');
+      PRAGMA user_version = 14;
+    `)
+
+    runMigrations(database)
+
+    expect(
+      database.prepare('SELECT id, my_identity FROM repository_profiles ORDER BY id').all()
+    ).toEqual([
+      { id: 'api', my_identity: 'Siobhan Legacy' },
+      { id: 'web', my_identity: 'Siobhan Legacy' }
+    ])
+    expect(database.pragma('user_version', { simple: true })).toBe(15)
   })
 
   it('backfills cached PRs when the configured repository is an ID instead of its name', () => {

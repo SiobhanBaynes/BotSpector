@@ -40,7 +40,6 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   useEffect(() => {
     if (!settings) return
     setModel(settings.model)
-    setMyIdentity(settings.myIdentity)
   }, [settings])
 
   useEffect(() => {
@@ -172,6 +171,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setMyIdentity('')
     setPat('')
   }
 
@@ -186,6 +186,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg(profile.adoOrg)
     setAdoProject(profile.adoProject)
     setAdoRepo(profile.adoRepo)
+    setMyIdentity(profile.myIdentity)
     setPat('')
     setMessage(null)
     setError(null)
@@ -202,6 +203,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setMyIdentity('')
     setPat('')
     setMessage(null)
     setError(null)
@@ -216,6 +218,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       adoOrg,
       adoProject,
       adoRepo,
+      myIdentity,
       ...(pat.trim() ? { pat: pat.trim() } : {})
     })
     setBusy(false)
@@ -249,23 +252,15 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     else setError(res.error)
   }
 
-  async function saveIdentity(): Promise<void> {
-    const res = await window.api.saveSettings({ myIdentity })
-    if (res.ok) {
-      setMessage('Saved your identity.')
-      await onChange()
-    } else setError(res.error)
-  }
-
   async function detectIdentity(): Promise<void> {
+    if (!repositoryProfileId) return
     setBusy(true)
     setError(null)
-    const res = await window.api.detectIdentity()
+    const res = await window.api.detectIdentity(repositoryProfileId)
     setBusy(false)
     if (res.ok) {
       setMyIdentity(res.data)
-      setMessage(`Detected: ${res.data}`)
-      await onChange()
+      setMessage(`Detected ${res.data}. Save the repository profile to keep it.`)
     } else setError(res.error)
   }
 
@@ -324,6 +319,21 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
               placeholder="my-repo"
             />
           </label>
+          <label>
+            Your identity
+            <input
+              value={myIdentity}
+              onChange={(event) => setMyIdentity(event.target.value)}
+              placeholder="e.g. Siobhan B"
+            />
+          </label>
+          <button
+            className="btn repository-detect-identity"
+            onClick={detectIdentity}
+            disabled={busy || repositoryEditorMode !== 'edit' || !hasStoredPat}
+          >
+            Detect from Azure DevOps
+          </button>
           <label className="repository-pat-field">
             Personal Access Token
             <input
@@ -339,9 +349,10 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
           </label>
         </div>
         <p className="muted small">
-          The PAT is encrypted and stored only for this repository profile. Leave it blank when
-          editing to keep the stored PAT. Repository details become fixed after pull requests are
-          stored, keeping review history attached to the right repository.
+          Identity marks and filters your pull requests for this profile. The PAT is encrypted and
+          stored only for this repository profile; leave it blank when editing to keep the stored
+          PAT. Repository details become fixed after pull requests are stored, keeping review
+          history attached to the right repository.
         </p>
         <div className="row repository-profile-editor-actions">
           <button
@@ -582,6 +593,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
                       <span>
                         {profile.adoOrg} / {profile.adoProject} / {profile.adoRepo}
                       </span>
+                      <span>{profile.myIdentity || 'Identity not set'}</span>
                     </div>
                     <div className="repository-profile-actions">
                       <span className={profile.hasAdoPat ? 'badge on' : 'badge'}>
@@ -623,30 +635,6 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
         {repositoryEditorMode === 'add' &&
           repositoryProfileEditor('Add repository', 'new-repository-profile-editor')}
-      </section>
-
-      <section className="card">
-        <h2>Your identity</h2>
-        <p className="muted">
-          Used to mark and filter your own pull requests. Detect it from Azure DevOps or type your
-          display name.
-        </p>
-        <label>
-          Your name
-          <input
-            value={myIdentity}
-            onChange={(e) => setMyIdentity(e.target.value)}
-            placeholder="e.g. Siobhan B"
-          />
-        </label>
-        <div className="row">
-          <button className="btn primary" onClick={saveIdentity} disabled={busy}>
-            Save
-          </button>
-          <button className="btn" onClick={detectIdentity} disabled={busy || !settings?.hasAdoPat}>
-            Detect from Azure DevOps
-          </button>
-        </div>
       </section>
 
       <section className="card">

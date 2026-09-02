@@ -45,12 +45,12 @@ npm run typecheck     # check main, renderer, and test TypeScript
 2. Click **Sign in to GitHub Copilot** and enter the shown code at the URL.
 3. Pick a **model** (latest Claude / GPT).
 4. Add a named repository profile with its Azure DevOps **organization**, **project**,
-   **repository**, and **PAT**, then Save.
+   **repository**, **identity**, and **PAT**, then Save.
 5. Go to **Pull requests**, Refresh, open a PR, and click **Review this PR**.
 
 Add more repository profiles in **Settings**, then switch the active repository from the sidebar.
-Each profile keeps its PAT, pull requests, and review history separate. A project-scoped PAT can
-be entered for each repository profile in that project.
+Each profile keeps its identity, PAT, pull requests, and review history separate. A project-scoped
+PAT can be entered for each repository profile in that project.
 
 ## Notes
 

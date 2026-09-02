@@ -389,6 +389,11 @@ h1 {
 .repository-profile-editor-fields .repository-pat-field {
   grid-column: 1 / -1;
 }
+.repository-detect-identity {
+  align-self: end;
+  justify-self: start;
+  margin-bottom: 12px;
+}
 .repository-profile-editor .small {
   margin-bottom: 12px;
 }

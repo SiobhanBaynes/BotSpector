@@ -36,6 +36,7 @@ export function getSetting(key: string): string {
     if (key === 'adoOrg') return profile.adoOrg
     if (key === 'adoProject') return profile.adoProject
     if (key === 'adoRepo') return profile.adoRepo
+    if (key === 'myIdentity') return profile.myIdentity
   }
   const db = getDb()
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
@@ -57,6 +58,7 @@ interface RepositoryProfileRow {
   ado_org: string
   ado_project: string
   ado_repo: string
+  my_identity: string
 }
 
 function mapRepositoryProfile(row: RepositoryProfileRow): RepositoryProfile {
@@ -65,7 +67,8 @@ function mapRepositoryProfile(row: RepositoryProfileRow): RepositoryProfile {
     nickname: row.nickname,
     adoOrg: row.ado_org,
     adoProject: row.ado_project,
-    adoRepo: row.ado_repo
+    adoRepo: row.ado_repo,
+    myIdentity: row.my_identity
   }
 }
 
@@ -74,7 +77,8 @@ function normalizeRepositoryProfile(input: RepositoryProfileInput): RepositoryPr
     nickname: input.nickname.trim(),
     adoOrg: input.adoOrg.trim(),
     adoProject: input.adoProject.trim(),
-    adoRepo: input.adoRepo.trim()
+    adoRepo: input.adoRepo.trim(),
+    myIdentity: input.myIdentity.trim()
   }
   if (!normalized.nickname) throw new Error('Repository nickname is required.')
   if (!normalized.adoOrg) throw new Error('Azure DevOps organization is required.')
@@ -87,7 +91,7 @@ function profileFromDb(profileId: string, includeArchived = false): RepositoryPr
   const archivedClause = includeArchived ? '' : 'AND archived_at IS NULL'
   const row = getDb()
     .prepare(
-      `SELECT id, nickname, ado_org, ado_project, ado_repo
+      `SELECT id, nickname, ado_org, ado_project, ado_repo, my_identity
        FROM repository_profiles
        WHERE id = ? ${archivedClause}`
     )
@@ -100,7 +104,8 @@ function projectActiveProfile(profile: RepositoryProfile | null): void {
     ['activeRepositoryProfileId', profile?.id ?? ''],
     ['adoOrg', profile?.adoOrg ?? ''],
     ['adoProject', profile?.adoProject ?? ''],
-    ['adoRepo', profile?.adoRepo ?? '']
+    ['adoRepo', profile?.adoRepo ?? ''],
+    ['myIdentity', profile?.myIdentity ?? '']
   ]
   const statement = getDb().prepare(
     `INSERT INTO settings (key, value) VALUES (?, ?)
@@ -112,7 +117,7 @@ function projectActiveProfile(profile: RepositoryProfile | null): void {
 export function listRepositoryProfiles(): RepositoryProfile[] {
   const rows = getDb()
     .prepare(
-      `SELECT id, nickname, ado_org, ado_project, ado_repo
+      `SELECT id, nickname, ado_org, ado_project, ado_repo, my_identity
        FROM repository_profiles
        WHERE archived_at IS NULL
        ORDER BY nickname COLLATE NOCASE, id`
@@ -207,37 +212,41 @@ export function saveRepositoryProfile(
       }
       db.prepare(
         `UPDATE repository_profiles
-         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?
+         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, my_identity = ?
          WHERE id = ?`
       ).run(
         normalized.nickname,
         normalized.adoOrg,
         normalized.adoProject,
         normalized.adoRepo,
+        normalized.myIdentity,
         current.id
       )
     } else if (sourceOwner) {
       db.prepare(
         `UPDATE repository_profiles
-         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, archived_at = NULL
+         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, my_identity = ?, archived_at = NULL
          WHERE id = ?`
       ).run(
         normalized.nickname,
         normalized.adoOrg,
         normalized.adoProject,
         normalized.adoRepo,
+        normalized.myIdentity,
         sourceOwner.id
       )
     } else {
       db.prepare(
-        `INSERT INTO repository_profiles (id, nickname, ado_org, ado_project, ado_repo)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO repository_profiles
+           (id, nickname, ado_org, ado_project, ado_repo, my_identity)
+         VALUES (?, ?, ?, ?, ?, ?)`
       ).run(
         targetId,
         normalized.nickname,
         normalized.adoOrg,
         normalized.adoProject,
-        normalized.adoRepo
+        normalized.adoRepo,
+        normalized.myIdentity
       )
     }
 

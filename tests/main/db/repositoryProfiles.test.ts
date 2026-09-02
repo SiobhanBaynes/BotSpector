@@ -22,15 +22,17 @@ import {
   markAllPullRequestsInactive,
   saveRepositoryProfile,
   selectRepositoryProfile,
+  withRepositoryProfile,
   withPullRequestProfile
 } from '../../../src/main/db/repo'
 
 function profile(
   nickname: string,
   adoRepo: string,
-  adoProject = 'DillonWay'
+  adoProject = 'DillonWay',
+  myIdentity = ''
 ): RepositoryProfileInput {
-  return { nickname, adoOrg: 'contoso', adoProject, adoRepo }
+  return { nickname, adoOrg: 'contoso', adoProject, adoRepo, myIdentity }
 }
 
 describe('repository profile persistence', () => {
@@ -53,16 +55,34 @@ describe('repository profile persistence', () => {
       nickname: '  Web  ',
       adoOrg: ' contoso ',
       adoProject: ' DillonWay ',
-      adoRepo: ' web-app '
+      adoRepo: ' web-app ',
+      myIdentity: ' Siobhan Web '
     })
 
-    expect(saved).toMatchObject(profile('Web', 'web-app'))
+    expect(saved).toMatchObject(profile('Web', 'web-app', 'DillonWay', 'Siobhan Web'))
     expect(listRepositoryProfiles()).toEqual([saved])
     expect(getActiveRepositoryProfile()).toEqual(saved)
     expect(getSetting('activeRepositoryProfileId')).toBe(saved.id)
     expect(getSetting('adoOrg')).toBe('contoso')
     expect(getSetting('adoProject')).toBe('DillonWay')
     expect(getSetting('adoRepo')).toBe('web-app')
+    expect(getSetting('myIdentity')).toBe('Siobhan Web')
+  })
+
+  it('keeps identities isolated by repository profile and async context', async () => {
+    const web = saveRepositoryProfile(null, profile('Web', 'web-app', 'DillonWay', 'Siobhan Web'))
+    const api = saveRepositoryProfile(null, profile('API', 'api', 'DillonWay', 'Siobhan API'))
+
+    selectRepositoryProfile(api.id)
+    expect(getSetting('myIdentity')).toBe('Siobhan API')
+
+    const webIdentity = await withRepositoryProfile(web.id, async () => {
+      await Promise.resolve()
+      return getSetting('myIdentity')
+    })
+
+    expect(webIdentity).toBe('Siobhan Web')
+    expect(getSetting('myIdentity')).toBe('Siobhan API')
   })
 
   it('enforces unique nicknames and repository locations case-insensitively', () => {
