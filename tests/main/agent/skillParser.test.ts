@@ -34,7 +34,9 @@ describe('slugify', () => {
 
 describe('parseFrontmatter', () => {
   it('parses scalar fields and trims the body', () => {
-    const parsed = parseFrontmatter('---\nname: Security\ndescription: Finds issues\n---\n\nReview code.\n')
+    const parsed = parseFrontmatter(
+      '---\nname: Security\ndescription: Finds issues\n---\n\nReview code.\n'
+    )
 
     expect(parsed).toEqual({
       front: {
@@ -197,13 +199,12 @@ describe('resolveGitSubdir', () => {
     expect(resolveGitSubdir(root, 'skills/security')).toBe(join(root, 'skills', 'security'))
   })
 
-  it.each([
-    '../outside',
-    'nested/../../outside',
-    '../botspector-skill-root-evil'
-  ])('rejects traversal through %j', (subdir) => {
-    expect(() => resolveGitSubdir(root, subdir)).toThrow('Invalid subdirectory')
-  })
+  it.each(['../outside', 'nested/../../outside', '../botspector-skill-root-evil'])(
+    'rejects traversal through %j',
+    (subdir) => {
+      expect(() => resolveGitSubdir(root, subdir)).toThrow('Invalid subdirectory')
+    }
+  )
 
   it('rejects an absolute path outside the root', () => {
     expect(() => resolveGitSubdir(root, resolve(root, '..', 'outside'))).toThrow(

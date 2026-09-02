@@ -45,15 +45,13 @@ const api = {
   saveSettings: (
     partial: Partial<Pick<Settings, 'adoOrg' | 'adoProject' | 'adoRepo' | 'model' | 'myIdentity'>>
   ): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.settingsSave, partial),
-  setAdoPat: (pat: string): Promise<IpcResult<Settings>> =>
-    ipcRenderer.invoke(IPC.setAdoPat, pat),
+  setAdoPat: (pat: string): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.setAdoPat, pat),
   detectIdentity: (): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.detectIdentity),
 
   // copilot
   copilotStartLogin: (): Promise<IpcResult<DeviceCodeInfo>> =>
     ipcRenderer.invoke(IPC.copilotStartLogin),
-  copilotCancelLogin: (): Promise<IpcResult<null>> =>
-    ipcRenderer.invoke(IPC.copilotCancelLogin),
+  copilotCancelLogin: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.copilotCancelLogin),
   copilotSignOut: (): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.copilotSignOut),
   copilotListModels: (): Promise<IpcResult<CopilotModel[]>> =>
     ipcRenderer.invoke(IPC.copilotListModels),
@@ -98,7 +96,8 @@ const api = {
   setAdoStatus: (
     prId: number,
     status: 'active' | 'abandoned'
-  ): Promise<IpcResult<PrAdoDetails | null>> => ipcRenderer.invoke(IPC.prSetAdoStatus, prId, status),
+  ): Promise<IpcResult<PrAdoDetails | null>> =>
+    ipcRenderer.invoke(IPC.prSetAdoStatus, prId, status),
   setDraft: (prId: number, isDraft: boolean): Promise<IpcResult<PrAdoDetails | null>> =>
     ipcRenderer.invoke(IPC.prSetDraft, prId, isDraft),
   getPostedComments: (prId: number): Promise<IpcResult<PostedComment[]>> =>
@@ -144,8 +143,7 @@ const api = {
     model?: string,
     skillId?: string,
     depth?: ReviewDepth
-  ): Promise<IpcResult<Review>> =>
-    ipcRenderer.invoke(IPC.prReview, prId, model, skillId, depth),
+  ): Promise<IpcResult<Review>> => ipcRenderer.invoke(IPC.prReview, prId, model, skillId, depth),
   reviewPullRequestPanel: (
     prId: number,
     models: string[],
@@ -178,7 +176,11 @@ const api = {
     ipcRenderer.invoke(IPC.findingGetCode, findingId),
   draftComment: (findingId: number, model?: string): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IPC.findingDraftComment, findingId, model),
-  refineComment: (findingId: number, instruction: string, model?: string): Promise<IpcResult<string>> =>
+  refineComment: (
+    findingId: number,
+    instruction: string,
+    model?: string
+  ): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IPC.findingRefineComment, findingId, instruction, model),
   updateComment: (findingId: number, text: string): Promise<IpcResult<null>> =>
     ipcRenderer.invoke(IPC.findingUpdateComment, findingId, text),
@@ -191,11 +193,8 @@ const api = {
     model?: string
   ): Promise<IpcResult<ResolutionAssessment>> =>
     ipcRenderer.invoke(IPC.findingCheckResolved, findingId, model),
-  chatAboutPr: (
-    prId: number,
-    message: string,
-    model?: string
-  ): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.prChat, prId, message, model),
+  chatAboutPr: (prId: number, message: string, model?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.prChat, prId, message, model),
   createFindingFromChat: (
     prId: number,
     assistantMessage: string,
@@ -210,8 +209,7 @@ const api = {
     ipcRenderer.invoke(IPC.findingCreateFromAdoComment, prId, threadId, model),
   getChatHistory: (prId: number): Promise<IpcResult<ChatMessage[]>> =>
     ipcRenderer.invoke(IPC.prChatHistory, prId),
-  clearChat: (prId: number): Promise<IpcResult<null>> =>
-    ipcRenderer.invoke(IPC.prChatClear, prId),
+  clearChat: (prId: number): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.prChatClear, prId),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)

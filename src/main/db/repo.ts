@@ -26,8 +26,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 export function getSetting(key: string): string {
   const db = getDb()
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
-    | { value: string }
-    | undefined
+    { value: string } | undefined
   return row?.value ?? DEFAULT_SETTINGS[key] ?? ''
 }
 
@@ -417,7 +416,9 @@ export function createReview(
     // Reuse this model's existing review row (if any) so we can keep the
     // findings that already have a posted comment.
     const existing = db
-      .prepare('SELECT id FROM reviews WHERE pr_id = ? AND model = ? ORDER BY created_at DESC LIMIT 1')
+      .prepare(
+        'SELECT id FROM reviews WHERE pr_id = ? AND model = ? ORDER BY created_at DESC LIMIT 1'
+      )
       .get(prId, model) as { id: number } | undefined
 
     let reviewId: number
@@ -476,7 +477,8 @@ export function createReview(
     )
     const createdFindingIds: string[] = []
     for (const f of findings) {
-      const publicId = f.publicId && !used.has(f.publicId) ? (used.add(f.publicId), f.publicId) : nextId()
+      const publicId =
+        f.publicId && !used.has(f.publicId) ? (used.add(f.publicId), f.publicId) : nextId()
       insert.run({ reviewId, ...f, publicId, model })
       createdFindingIds.push(publicId)
     }
@@ -510,12 +512,16 @@ export function addManualFinding(prId: number, model: string, finding: NewFindin
   const db = getDb()
   const tx = db.transaction(() => {
     let review = db
-      .prepare('SELECT id FROM reviews WHERE pr_id = ? AND model = ? ORDER BY created_at DESC LIMIT 1')
+      .prepare(
+        'SELECT id FROM reviews WHERE pr_id = ? AND model = ? ORDER BY created_at DESC LIMIT 1'
+      )
       .get(prId, model) as { id: number } | undefined
     if (!review) {
-      const head = (db.prepare('SELECT head_commit FROM pull_requests WHERE id = ?').get(prId) as
-        | { head_commit: string | null }
-        | undefined)?.head_commit ?? ''
+      const head =
+        (
+          db.prepare('SELECT head_commit FROM pull_requests WHERE id = ?').get(prId) as
+            { head_commit: string | null } | undefined
+        )?.head_commit ?? ''
       const reviewId = Number(
         db
           .prepare(
@@ -589,13 +595,13 @@ export function applyContributions(
            WHERE r.pr_id = ? AND f.public_id = ? LIMIT 1`
         )
         .get(prId, c.publicId) as
-        | { id: number; contributors: string | null; description: string }
-        | undefined
+        { id: number; contributors: string | null; description: string } | undefined
       if (!row) continue
       let contributors: string[] = []
       try {
         const parsed = JSON.parse(row.contributors ?? '[]')
-        if (Array.isArray(parsed)) contributors = parsed.filter((m): m is string => typeof m === 'string')
+        if (Array.isArray(parsed))
+          contributors = parsed.filter((m): m is string => typeof m === 'string')
       } catch {
         contributors = []
       }
@@ -671,7 +677,8 @@ function mapFinding(row: FindingRow, comment: Comment | null): Finding {
   if (row.contributors) {
     try {
       const parsed = JSON.parse(row.contributors)
-      if (Array.isArray(parsed)) contributors = parsed.filter((m): m is string => typeof m === 'string')
+      if (Array.isArray(parsed))
+        contributors = parsed.filter((m): m is string => typeof m === 'string')
     } catch {
       contributors = []
     }
@@ -693,7 +700,9 @@ function mapFinding(row: FindingRow, comment: Comment | null): Finding {
   }
 }
 
-export function getReviewById(reviewId: number): { id: number; prId: number; reviewedCommit: string } | null {
+export function getReviewById(
+  reviewId: number
+): { id: number; prId: number; reviewedCommit: string } | null {
   const db = getDb()
   const row = db
     .prepare('SELECT id, pr_id, reviewed_commit FROM reviews WHERE id = ?')
@@ -708,8 +717,7 @@ export function getReviewForPr(prId: number): Review | null {
   const review = db
     .prepare('SELECT * FROM reviews WHERE pr_id = ? ORDER BY created_at DESC LIMIT 1')
     .get(prId) as
-    | { id: number; pr_id: number; model: string; created_at: string; status: string }
-    | undefined
+    { id: number; pr_id: number; model: string; created_at: string; status: string } | undefined
   if (!review) return null
 
   const findingRows = db
@@ -722,9 +730,8 @@ export function getReviewForPr(prId: number): Review | null {
     .all(prId) as FindingRow[]
 
   const findings: Finding[] = findingRows.map((fr) => {
-    const commentRow = db
-      .prepare('SELECT * FROM comments WHERE finding_id = ?')
-      .get(fr.id) as CommentRow | undefined
+    const commentRow = db.prepare('SELECT * FROM comments WHERE finding_id = ?').get(fr.id) as
+      CommentRow | undefined
     return mapFinding(fr, commentRow ? mapComment(commentRow) : null)
   })
 
@@ -779,7 +786,10 @@ export function listReviewSummaries(prId: number): ReviewSummary[] {
       const parsed = JSON.parse(value) as Record<string, unknown>
       if (!parsed || typeof parsed !== 'object') return null
       if (parsed.depth !== 'quick' && parsed.depth !== 'intensive') return null
-      if (!Array.isArray(parsed.models) || !parsed.models.every((model) => typeof model === 'string')) {
+      if (
+        !Array.isArray(parsed.models) ||
+        !parsed.models.every((model) => typeof model === 'string')
+      ) {
         return null
       }
       if (!Array.isArray(parsed.skills)) return null
@@ -841,12 +851,10 @@ export function listReviewSummaries(prId: number): ReviewSummary[] {
 export function getFinding(findingId: number): Finding | null {
   const db = getDb()
   const fr = db.prepare('SELECT * FROM findings WHERE id = ?').get(findingId) as
-    | FindingRow
-    | undefined
+    FindingRow | undefined
   if (!fr) return null
-  const commentRow = db
-    .prepare('SELECT * FROM comments WHERE finding_id = ?')
-    .get(findingId) as CommentRow | undefined
+  const commentRow = db.prepare('SELECT * FROM comments WHERE finding_id = ?').get(findingId) as
+    CommentRow | undefined
   return mapFinding(fr, commentRow ? mapComment(commentRow) : null)
 }
 
@@ -855,9 +863,7 @@ export function setFindingStatus(findingId: number, status: FindingStatus): void
 }
 
 export function setFindingExplanation(findingId: number, explanation: string): void {
-  getDb()
-    .prepare('UPDATE findings SET explanation = ? WHERE id = ?')
-    .run(explanation, findingId)
+  getDb().prepare('UPDATE findings SET explanation = ? WHERE id = ?').run(explanation, findingId)
 }
 
 export function upsertComment(findingId: number, draftText: string): void {
@@ -911,9 +917,9 @@ export function updateCommentThreadState(
 /** PR ids that have at least one posted comment thread. */
 export function getPrIdsWithPostedComments(): number[] {
   const db = getDb()
-  const rows = db
-    .prepare('SELECT DISTINCT pr_id AS prId FROM posted_comments')
-    .all() as Array<{ prId: number }>
+  const rows = db.prepare('SELECT DISTINCT pr_id AS prId FROM posted_comments').all() as Array<{
+    prId: number
+  }>
   return rows.map((r) => r.prId)
 }
 
@@ -1018,7 +1024,10 @@ export function listChatMessages(prId: number): ChatMessage[] {
   const rows = getDb()
     .prepare('SELECT role, content FROM chat_messages WHERE pr_id = ? ORDER BY id ASC')
     .all(prId) as Array<{ role: string; content: string }>
-  return rows.map((r) => ({ role: r.role === 'assistant' ? 'assistant' : 'user', content: r.content }))
+  return rows.map((r) => ({
+    role: r.role === 'assistant' ? 'assistant' : 'user',
+    content: r.content
+  }))
 }
 
 /** Append visible turns to a PR's chat and trim to the retention cap. */
@@ -1026,9 +1035,7 @@ export function addChatMessages(prId: number, messages: ChatMessage[]): void {
   if (messages.length === 0) return
   const db = getDb()
   const tx = db.transaction(() => {
-    const insert = db.prepare(
-      'INSERT INTO chat_messages(pr_id, role, content) VALUES(?, ?, ?)'
-    )
+    const insert = db.prepare('INSERT INTO chat_messages(pr_id, role, content) VALUES(?, ?, ?)')
     for (const m of messages) insert.run(prId, m.role, m.content)
     // Keep only the most recent MAX_CHAT_MESSAGES rows for this PR.
     db.prepare(

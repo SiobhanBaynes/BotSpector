@@ -38,7 +38,7 @@ export function ChatTab({
   // Focus the composer when a change is pinned from the Files tab.
   useEffect(() => {
     if (pinnedChange) inputRef.current?.focus()
-  }, [pinnedChange?.nonce])
+  }, [pinnedChange])
 
   // Load the persisted conversation for this PR (and reset when it changes).
   useEffect(() => {

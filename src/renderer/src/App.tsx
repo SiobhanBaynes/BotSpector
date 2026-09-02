@@ -22,7 +22,8 @@ export function App(): JSX.Element {
     void refreshSettings()
   }, [refreshSettings])
 
-  const configured = !!settings && settings.copilotConnected && settings.hasAdoPat && !!settings.adoRepo
+  const configured =
+    !!settings && settings.copilotConnected && settings.hasAdoPat && !!settings.adoRepo
 
   return (
     <div className="app">
@@ -69,8 +70,11 @@ export function App(): JSX.Element {
             <h2>Let’s get BotSpector snooping 🔍</h2>
             <p>
               First, sign in to GitHub Copilot, add your Azure DevOps PAT and repository, and pick a
-              model in <button className="link" onClick={() => setTab('settings')}>Settings</button>.
-              Then I’ll start poking around your PRs.
+              model in{' '}
+              <button className="link" onClick={() => setTab('settings')}>
+                Settings
+              </button>
+              . Then I’ll start poking around your PRs.
             </p>
           </div>
         )}

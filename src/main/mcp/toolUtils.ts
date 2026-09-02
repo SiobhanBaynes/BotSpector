@@ -9,10 +9,7 @@ export interface McpTool {
 }
 
 /** Include only non-null values explicitly declared by a tool's input schema. */
-export function buildArgs(
-  tool: McpTool,
-  values: Record<string, unknown>
-): Record<string, unknown> {
+export function buildArgs(tool: McpTool, values: Record<string, unknown>): Record<string, unknown> {
   const properties = tool.inputSchema.properties ?? {}
   const args: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(values)) {

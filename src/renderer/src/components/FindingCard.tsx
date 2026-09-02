@@ -1,5 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { CodeSnippet, Finding, FindingStatus, ResolutionAssessment } from '../../../shared/types'
+import type {
+  CodeSnippet,
+  Finding,
+  FindingStatus,
+  ResolutionAssessment
+} from '../../../shared/types'
 import { Markdown } from './Markdown'
 
 interface Props {
@@ -71,7 +76,13 @@ const THREAD_STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'byDesign', label: 'By design' }
 ]
 
-export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAbout }: Props): JSX.Element {
+export function FindingCard({
+  finding,
+  model,
+  onChanged,
+  onOpenInFiles,
+  onChatAbout
+}: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -278,7 +289,9 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAb
               {posted ? (
                 <>
                   <div className="thread-state">
-                    <span className={`thread-pill ${threadStateClass(finding.comment.threadStatus)}`}>
+                    <span
+                      className={`thread-pill ${threadStateClass(finding.comment.threadStatus)}`}
+                    >
                       {threadStateLabel(finding.comment.threadStatus)}
                     </span>
                     <span className="muted small">
@@ -454,7 +467,9 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAb
               ✓ Accept
             </button>
             <button
-              className={finding.status === 'dismissed' ? 'btn subtle active-dismiss' : 'btn subtle'}
+              className={
+                finding.status === 'dismissed' ? 'btn subtle active-dismiss' : 'btn subtle'
+              }
               onClick={() => setStatus('dismissed')}
               disabled={busy !== null}
               title="Dismiss this finding"
@@ -475,4 +490,3 @@ export function FindingCard({ finding, model, onChanged, onOpenInFiles, onChatAb
     </div>
   )
 }
-

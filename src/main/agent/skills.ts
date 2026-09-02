@@ -136,7 +136,5 @@ export function getSkill(id: string): Skill | undefined {
 // The 'general' skill reuses the pre-existing 'reviewInstructions' key so
 // upgrading users keep any override they'd already saved.
 export function skillOverrideSettingKey(skillId: string): string {
-  return skillId === GENERAL_SKILL_ID
-    ? 'reviewInstructions'
-    : `reviewInstructions:${skillId}`
+  return skillId === GENERAL_SKILL_ID ? 'reviewInstructions' : `reviewInstructions:${skillId}`
 }

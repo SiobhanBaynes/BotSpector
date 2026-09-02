@@ -1,0 +1,201 @@
+name: BotSpector_release_$(Build.SourceBranchName)_$(Rev:r)
+
+trigger:
+  branches:
+    exclude:
+      - '*'
+  tags:
+    include:
+      - v*
+
+pr: none
+
+variables:
+  - group: BotSpector-Release-Signing
+  - name: npm_config_cache
+    value: $(Pipeline.Workspace)/.npm
+
+stages:
+  - stage: Validate
+    displayName: Validate release
+    jobs:
+      - job: Quality
+        displayName: Test and analyze
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - template: templates/npm-setup.yml
+
+          - script: npm run release:verify-tag
+            displayName: Verify tag matches package version
+
+          - script: npm run check
+            displayName: Run quality and security gates
+
+          - script: npm run build
+            displayName: Build application
+
+  - stage: Package
+    displayName: Sign and package
+    dependsOn: Validate
+    jobs:
+      - job: macOS
+        displayName: macOS $(buildArch)
+        pool:
+          vmImage: macos-latest
+        strategy:
+          matrix:
+            x64:
+              buildArch: x64
+            arm64:
+              buildArch: arm64
+        steps:
+          - template: templates/npm-setup.yml
+
+          - task: DownloadSecureFile@1
+            name: macSigningCertificate
+            displayName: Download macOS signing certificate
+            inputs:
+              secureFile: BotSpector-macOS.p12
+
+          - task: DownloadSecureFile@1
+            name: appleApiKey
+            displayName: Download Apple notarization key
+            inputs:
+              secureFile: AuthKey_BotSpector.p8
+
+          - bash: npm run package:release -- --mac --$(buildArch)
+            displayName: Sign, notarize, and package macOS application
+            env:
+              CSC_LINK: $(macSigningCertificate.secureFilePath)
+              CSC_KEY_PASSWORD: $(MAC_CERTIFICATE_PASSWORD)
+              APPLE_API_KEY: $(appleApiKey.secureFilePath)
+              APPLE_API_KEY_ID: $(APPLE_API_KEY_ID)
+              APPLE_API_ISSUER: $(APPLE_API_ISSUER)
+
+          - bash: |
+              set -euo pipefail
+              app_path="$(find dist -path '*/BotSpector.app' -type d -print -quit)"
+              if [[ -z "$app_path" ]]; then
+                echo 'Packaged BotSpector application was not found.' >&2
+                exit 1
+              fi
+              codesign --verify --deep --strict --verbose=2 "$app_path"
+              xcrun stapler validate "$app_path"
+              spctl --assess --type execute --verbose=2 "$app_path"
+              host_arch="$(uname -m)"
+              if [[ "$host_arch" == "x86_64" ]]; then
+                host_arch=x64
+              fi
+              if [[ "$host_arch" == "$(buildArch)" ]]; then
+                echo '##vso[task.setvariable variable=canRunMacSmoke]true'
+              else
+                echo '##vso[task.setvariable variable=canRunMacSmoke]false'
+                echo "Skipping launch of $(buildArch) package on $host_arch host."
+              fi
+            displayName: Verify macOS signature and notarization
+
+          - bash: |
+              set -euo pipefail
+              executable="$(find dist -path '*/BotSpector.app/Contents/MacOS/BotSpector' -type f -print -quit)"
+              BOTSPECTOR_EXECUTABLE="$PWD/$executable" npm run test:smoke
+            displayName: Smoke test macOS application
+            condition: and(succeeded(), eq(variables['canRunMacSmoke'], 'true'))
+            env:
+              CI: 'true'
+              PLAYWRIGHT_JUNIT_OUTPUT_FILE: $(Common.TestResultsDirectory)/playwright-macos-$(buildArch).xml
+
+          - task: PublishTestResults@2
+            displayName: Publish macOS smoke results
+            condition: and(succeededOrFailed(), eq(variables['canRunMacSmoke'], 'true'))
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: $(Common.TestResultsDirectory)/playwright-macos-$(buildArch).xml
+              testRunTitle: BotSpector macOS $(buildArch) release smoke
+              failTaskOnFailedTests: true
+              failTaskOnMissingResultsFile: true
+
+          - task: CopyFiles@2
+            displayName: Collect macOS installers
+            inputs:
+              SourceFolder: $(Build.SourcesDirectory)/dist
+              Contents: |
+                *.dmg
+                *.zip
+                *.blockmap
+              TargetFolder: $(Build.ArtifactStagingDirectory)/macos-$(buildArch)
+
+          - publish: $(Build.ArtifactStagingDirectory)/macos-$(buildArch)
+            displayName: Publish macOS installers
+            artifact: BotSpector-macOS-$(buildArch)
+
+      - job: Windows
+        displayName: Windows x64
+        pool:
+          vmImage: windows-latest
+        steps:
+          - template: templates/npm-setup.yml
+
+          - task: DownloadSecureFile@1
+            name: windowsSigningCertificate
+            displayName: Download Windows signing certificate
+            inputs:
+              secureFile: BotSpector-Windows.pfx
+
+          - powershell: npm run package:release -- --win --x64
+            displayName: Sign and package Windows application
+            env:
+              CSC_LINK: $(windowsSigningCertificate.secureFilePath)
+              CSC_KEY_PASSWORD: $(WINDOWS_CERTIFICATE_PASSWORD)
+
+          - powershell: |
+              $application = Get-ChildItem -Path dist -Filter BotSpector.exe -Recurse |
+                Where-Object { $_.FullName -match 'win-unpacked' } |
+                Select-Object -First 1
+              if (-not $application) {
+                throw 'Packaged BotSpector application was not found.'
+              }
+
+              $installers = Get-ChildItem -Path dist -Filter *.exe -File
+              if (-not $installers) {
+                throw 'BotSpector installer was not found.'
+              }
+
+              @($application) + @($installers) | ForEach-Object {
+                $signature = Get-AuthenticodeSignature $_.FullName
+                if ($signature.Status -ne 'Valid') {
+                  throw "Invalid Authenticode signature on $($_.Name): $($signature.Status)"
+                }
+              }
+
+              $env:BOTSPECTOR_EXECUTABLE = $application.FullName
+              npm run test:smoke
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            displayName: Verify and smoke test Windows application
+            env:
+              CI: 'true'
+              PLAYWRIGHT_JUNIT_OUTPUT_FILE: $(Common.TestResultsDirectory)/playwright-windows.xml
+
+          - task: PublishTestResults@2
+            displayName: Publish Windows smoke results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: $(Common.TestResultsDirectory)/playwright-windows.xml
+              testRunTitle: BotSpector Windows x64 release smoke
+              failTaskOnFailedTests: true
+              failTaskOnMissingResultsFile: true
+
+          - task: CopyFiles@2
+            displayName: Collect Windows installers
+            inputs:
+              SourceFolder: $(Build.SourcesDirectory)/dist
+              Contents: |
+                *.exe
+                *.zip
+                *.blockmap
+              TargetFolder: $(Build.ArtifactStagingDirectory)/windows-x64
+
+          - publish: $(Build.ArtifactStagingDirectory)/windows-x64
+            displayName: Publish Windows installers
+            artifact: BotSpector-Windows-x64
