@@ -19,10 +19,22 @@ export type ReviewStatus =
 
 export type ReviewDepth = 'quick' | 'intensive'
 
+export interface RepositoryProfile {
+  id: string
+  nickname: string
+  adoOrg: string
+  adoProject: string
+  adoRepo: string
+}
+
+export type RepositoryProfileInput = Omit<RepositoryProfile, 'id'>
+
 export interface Settings {
   adoOrg: string
   adoProject: string
   adoRepo: string
+  repositoryProfiles: RepositoryProfile[]
+  activeRepositoryProfileId: string | null
   model: string
   myIdentity: string
   hasAdoPat: boolean

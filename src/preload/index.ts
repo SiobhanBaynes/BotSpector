@@ -14,6 +14,7 @@ import type {
   PostedComment,
   PrAdoDetails,
   PullRequest,
+  RepositoryProfileInput,
   ResolutionAssessment,
   Review,
   ReviewDepth,
@@ -43,8 +44,17 @@ const api = {
   // settings
   getSettings: (): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.settingsGet),
   saveSettings: (
-    partial: Partial<Pick<Settings, 'adoOrg' | 'adoProject' | 'adoRepo' | 'model' | 'myIdentity'>>
+    partial: Partial<Pick<Settings, 'model' | 'myIdentity'>>
   ): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.settingsSave, partial),
+  saveRepositoryProfile: (
+    profileId: string | null,
+    input: RepositoryProfileInput
+  ): Promise<IpcResult<Settings>> =>
+    ipcRenderer.invoke(IPC.repositoryProfileSave, profileId, input),
+  selectRepositoryProfile: (profileId: string): Promise<IpcResult<Settings>> =>
+    ipcRenderer.invoke(IPC.repositoryProfileSelect, profileId),
+  deleteRepositoryProfile: (profileId: string): Promise<IpcResult<Settings>> =>
+    ipcRenderer.invoke(IPC.repositoryProfileDelete, profileId),
   setAdoPat: (pat: string): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.setAdoPat, pat),
   detectIdentity: (): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.detectIdentity),
 

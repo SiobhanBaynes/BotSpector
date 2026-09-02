@@ -20,13 +20,39 @@ export type { McpTool } from './toolUtils'
  * (like listing pull requests).
  */
 
-let client: Client | null = null
-let cachedTools: McpTool[] | null = null
-let connectKey = '' // org + pat fingerprint, so we reconnect when settings change
-let connecting: Promise<Client> | null = null // in-flight connection (mutex)
+interface ConnectionState {
+  client: Client | null
+  cachedTools: McpTool[] | null
+  connecting: Promise<Client> | null
+}
+
+interface ConnectionConfig {
+  key: string
+  org: string
+  pat: string
+}
+
+const connections = new Map<string, ConnectionState>()
 
 function currentKey(org: string, pat: string): string {
   return `${org}::${pat.slice(0, 6)}:${pat.length}`
+}
+
+function currentConfig(): ConnectionConfig {
+  const org = getSetting('adoOrg')
+  const pat = secrets.getAdoPat()
+  if (!org) throw new Error('Azure DevOps organization is not set')
+  if (!pat) throw new Error('Azure DevOps PAT is not set')
+  return { key: currentKey(org, pat), org, pat }
+}
+
+function connectionState(key: string): ConnectionState {
+  let state = connections.get(key)
+  if (!state) {
+    state = { client: null, cachedTools: null, connecting: null }
+    connections.set(key, state)
+  }
+  return state
 }
 
 /** Base64 of `email:pat` as required by the ADO MCP server PAT auth. */
@@ -34,21 +60,12 @@ function encodePat(pat: string): string {
   return Buffer.from(`pr-reviewer@local:${pat}`, 'utf-8').toString('base64')
 }
 
-export async function ensureConnected(): Promise<Client> {
-  const org = getSetting('adoOrg')
-  const pat = secrets.getAdoPat()
-  if (!org) throw new Error('Azure DevOps organization is not set')
-  if (!pat) throw new Error('Azure DevOps PAT is not set')
+async function ensureConfigConnected(config: ConnectionConfig): Promise<Client> {
+  const state = connectionState(config.key)
+  if (state.client) return state.client
+  if (state.connecting) return state.connecting
 
-  const key = currentKey(org, pat)
-  if (client && key === connectKey) return client
-
-  // If a connection is already being established, reuse it instead of racing.
-  if (connecting) return connecting
-
-  connecting = (async () => {
-    await disconnect()
-
+  state.connecting = (async () => {
     const t = new StdioClientTransport({
       command: getNpxCommand(),
       args: [
@@ -58,7 +75,7 @@ export async function ensureConnected(): Promise<Client> {
         // which broke our deterministic findTool() lookups. Pin to a known-good
         // version and upgrade deliberately. See docs/TOOLSET.md upstream.
         '@azure-devops/mcp@2.8.1',
-        org,
+        config.org,
         '-d',
         'core',
         'repositories',
@@ -74,34 +91,49 @@ export async function ensureConnected(): Promise<Client> {
       ],
       env: {
         ...process.env,
-        PERSONAL_ACCESS_TOKEN: encodePat(pat)
+        PERSONAL_ACCESS_TOKEN: encodePat(config.pat)
       }
     })
 
     const c = new Client({ name: 'botspector', version: '0.1.0' }, { capabilities: {} })
     await c.connect(t)
-    client = c
-    connectKey = key
-    cachedTools = null
+    state.client = c
+    state.cachedTools = null
     return c
   })()
 
   try {
-    return await connecting
+    return await state.connecting
   } finally {
-    connecting = null
+    state.connecting = null
   }
 }
 
-export async function disconnect(): Promise<void> {
+export async function ensureConnected(): Promise<Client> {
+  return ensureConfigConnected(currentConfig())
+}
+
+async function disconnectKey(key: string): Promise<void> {
+  const state = connections.get(key)
+  if (!state) return
+  let activeClient = state.client
+  if (!activeClient && state.connecting) {
+    try {
+      activeClient = await state.connecting
+    } catch {
+      // A failed connection has nothing to close.
+    }
+  }
   try {
-    await client?.close()
+    await activeClient?.close()
   } catch {
     // ignore
   }
-  client = null
-  cachedTools = null
-  connectKey = ''
+  if (connections.get(key) === state) connections.delete(key)
+}
+
+export async function disconnect(): Promise<void> {
+  await Promise.all(Array.from(connections.keys(), disconnectKey))
 }
 
 function isConnectionError(message: string): boolean {
@@ -110,30 +142,35 @@ function isConnectionError(message: string): boolean {
 }
 
 export async function listTools(): Promise<McpTool[]> {
-  if (cachedTools) return cachedTools
+  const config = currentConfig()
+  const initialState = connectionState(config.key)
+  if (initialState.cachedTools) return initialState.cachedTools
   const load = async (): Promise<McpTool[]> => {
-    const c = await ensureConnected()
+    const c = await ensureConfigConnected(config)
+    const state = connectionState(config.key)
+    if (state.cachedTools) return state.cachedTools
     const res = await c.listTools()
-    return res.tools.map((t) => ({
+    state.cachedTools = res.tools.map((t) => ({
       name: t.name,
       description: t.description ?? '',
       inputSchema: (t.inputSchema as McpTool['inputSchema']) ?? { type: 'object' }
     }))
+    return state.cachedTools
   }
   try {
-    cachedTools = await load()
+    return await load()
   } catch (e) {
     if (!isConnectionError((e as Error).message)) throw e
-    await disconnect()
-    cachedTools = await load()
+    await disconnectKey(config.key)
+    return load()
   }
-  return cachedTools
 }
 
 /** Call a tool and return its text content concatenated. */
 export async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  const config = currentConfig()
   const invoke = async (): Promise<string> => {
-    const c = await ensureConnected()
+    const c = await ensureConfigConnected(config)
     const res = await c.callTool({ name, arguments: args })
     const content = (res.content as Array<{ type: string; text?: string }>) ?? []
     const text = content
@@ -150,7 +187,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   } catch (e) {
     // If the transport dropped, reconnect once and retry.
     if (!isConnectionError((e as Error).message)) throw e
-    await disconnect()
+    await disconnectKey(config.key)
     return invoke()
   }
 }

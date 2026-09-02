@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import type { CopilotModel, DeviceCodeInfo, Settings, Skill } from '../../../shared/types'
+import type {
+  CopilotModel,
+  DeviceCodeInfo,
+  RepositoryProfile,
+  Settings,
+  Skill
+} from '../../../shared/types'
 import type { ThemePref } from '../theme'
 
 interface Props {
@@ -10,6 +16,8 @@ interface Props {
 }
 
 export function SettingsView({ settings, onChange, theme, onThemeChange }: Props): JSX.Element {
+  const [repositoryProfileId, setRepositoryProfileId] = useState<string | null>(null)
+  const [repositoryNickname, setRepositoryNickname] = useState('')
   const [adoOrg, setAdoOrg] = useState('')
   const [adoProject, setAdoProject] = useState('')
   const [adoRepo, setAdoRepo] = useState('')
@@ -30,6 +38,11 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
   useEffect(() => {
     if (!settings) return
+    const activeProfile = settings.repositoryProfiles.find(
+      (profile) => profile.id === settings.activeRepositoryProfileId
+    )
+    setRepositoryProfileId(activeProfile?.id ?? null)
+    setRepositoryNickname(activeProfile?.nickname ?? '')
     setAdoOrg(settings.adoOrg)
     setAdoProject(settings.adoProject)
     setAdoRepo(settings.adoRepo)
@@ -159,13 +172,53 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     else setError(res.error)
   }
 
-  async function saveAdo(): Promise<void> {
+  function editRepositoryProfile(profile: RepositoryProfile): void {
+    setRepositoryProfileId(profile.id)
+    setRepositoryNickname(profile.nickname)
+    setAdoOrg(profile.adoOrg)
+    setAdoProject(profile.adoProject)
+    setAdoRepo(profile.adoRepo)
+    setMessage(null)
+    setError(null)
+  }
+
+  function addRepositoryProfile(): void {
+    setRepositoryProfileId(null)
+    setRepositoryNickname('')
+    setAdoOrg('')
+    setAdoProject('')
+    setAdoRepo('')
+    setMessage(null)
+    setError(null)
+  }
+
+  async function saveRepositoryProfile(): Promise<void> {
     setBusy(true)
     setError(null)
-    const res = await window.api.saveSettings({ adoOrg, adoProject, adoRepo })
+    const res = await window.api.saveRepositoryProfile(repositoryProfileId, {
+      nickname: repositoryNickname,
+      adoOrg,
+      adoProject,
+      adoRepo
+    })
     setBusy(false)
     if (res.ok) {
-      setMessage('Azure DevOps settings saved.')
+      setMessage(`Repository profile “${repositoryNickname.trim()}” saved.`)
+      await onChange()
+    } else setError(res.error)
+  }
+
+  async function deleteRepositoryProfile(profile: RepositoryProfile): Promise<void> {
+    const confirmed = window.confirm(
+      `Remove “${profile.nickname}”? Its stored pull requests and review history will be kept.`
+    )
+    if (!confirmed) return
+    setBusy(true)
+    setError(null)
+    const res = await window.api.deleteRepositoryProfile(profile.id)
+    setBusy(false)
+    if (res.ok) {
+      setMessage(`Removed repository profile “${profile.nickname}”.`)
       await onChange()
     } else setError(res.error)
   }
@@ -402,30 +455,112 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       </section>
 
       <section className="card">
-        <h2>Azure DevOps</h2>
-        <label>
-          Organization
-          <input value={adoOrg} onChange={(e) => setAdoOrg(e.target.value)} placeholder="contoso" />
-        </label>
-        <label>
-          Project
-          <input
-            value={adoProject}
-            onChange={(e) => setAdoProject(e.target.value)}
-            placeholder="MyProject"
-          />
-        </label>
-        <label>
-          Repository
-          <input
-            value={adoRepo}
-            onChange={(e) => setAdoRepo(e.target.value)}
-            placeholder="my-repo"
-          />
-        </label>
-        <button className="btn primary" onClick={saveAdo} disabled={busy}>
-          Save Azure DevOps settings
-        </button>
+        <div className="settings-section-heading">
+          <div>
+            <h2>Azure DevOps repositories</h2>
+            <p className="muted">
+              Name repositories so you can switch between them from the sidebar.
+            </p>
+          </div>
+          <button className="btn" onClick={addRepositoryProfile} disabled={busy}>
+            Add repository
+          </button>
+        </div>
+        {settings?.repositoryProfiles.length ? (
+          <div className="repository-profile-list">
+            {settings.repositoryProfiles.map((profile) => (
+              <div
+                className={
+                  profile.id === settings.activeRepositoryProfileId
+                    ? 'repository-profile-row active'
+                    : 'repository-profile-row'
+                }
+                key={profile.id}
+              >
+                <div className="repository-profile-details">
+                  <strong>{profile.nickname}</strong>
+                  <span>
+                    {profile.adoOrg} / {profile.adoProject} / {profile.adoRepo}
+                  </span>
+                </div>
+                <div className="repository-profile-actions">
+                  {profile.id === settings.activeRepositoryProfileId && (
+                    <span className="badge on">Active</span>
+                  )}
+                  <button
+                    className="btn subtle"
+                    onClick={() => editRepositoryProfile(profile)}
+                    disabled={busy}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="btn danger"
+                    onClick={() => void deleteRepositoryProfile(profile)}
+                    disabled={busy}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">No repository profiles yet.</p>
+        )}
+
+        <div className="repository-profile-editor">
+          <h3>{repositoryProfileId ? 'Edit repository' : 'Add repository'}</h3>
+          <label>
+            Nickname
+            <input
+              value={repositoryNickname}
+              onChange={(event) => setRepositoryNickname(event.target.value)}
+              placeholder="Website"
+            />
+          </label>
+          <label>
+            Organization
+            <input
+              value={adoOrg}
+              onChange={(e) => setAdoOrg(e.target.value)}
+              placeholder="contoso"
+            />
+          </label>
+          <label>
+            Project
+            <input
+              value={adoProject}
+              onChange={(e) => setAdoProject(e.target.value)}
+              placeholder="MyProject"
+            />
+          </label>
+          <label>
+            Repository
+            <input
+              value={adoRepo}
+              onChange={(e) => setAdoRepo(e.target.value)}
+              placeholder="my-repo"
+            />
+          </label>
+          <p className="muted small">
+            Repository details become fixed after pull requests are stored, keeping review history
+            attached to the right repository.
+          </p>
+          <button
+            className="btn primary"
+            onClick={saveRepositoryProfile}
+            disabled={
+              busy ||
+              !repositoryNickname.trim() ||
+              !adoOrg.trim() ||
+              !adoProject.trim() ||
+              !adoRepo.trim()
+            }
+          >
+            Save repository
+          </button>
+        </div>
       </section>
 
       <section className="card">

@@ -4,6 +4,9 @@ export const IPC = {
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
+  repositoryProfileSave: 'settings:repositoryProfileSave',
+  repositoryProfileSelect: 'settings:repositoryProfileSelect',
+  repositoryProfileDelete: 'settings:repositoryProfileDelete',
   setAdoPat: 'settings:setAdoPat',
   detectIdentity: 'settings:detectIdentity',
 

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import type Database from 'better-sqlite3'
 
 /**
@@ -213,6 +214,74 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
         )
       FROM reviews r;
     `)
+  },
+  // v14 -> store named repository profiles and migrate the active legacy
+  // repository without disturbing its PR and review history.
+  (db) => {
+    db.exec(`
+      CREATE TABLE repository_profiles (
+        id          TEXT PRIMARY KEY,
+        nickname    TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(nickname)) > 0),
+        ado_org     TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(ado_org)) > 0),
+        ado_project TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(ado_project)) > 0),
+        ado_repo    TEXT NOT NULL COLLATE NOCASE CHECK (length(trim(ado_repo)) > 0),
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        archived_at TEXT,
+        UNIQUE (ado_org, ado_project, ado_repo)
+      );
+
+      CREATE UNIQUE INDEX idx_repository_profiles_nickname_active
+      ON repository_profiles(nickname)
+      WHERE archived_at IS NULL;
+    `)
+
+    const rows = db
+      .prepare(
+        `SELECT key, value FROM settings
+         WHERE key IN ('adoOrg', 'adoProject', 'adoRepo')`
+      )
+      .all() as Array<{ key: string; value: string }>
+    const legacy = Object.fromEntries(rows.map((row) => [row.key, row.value.trim()]))
+    const adoOrg = legacy.adoOrg ?? ''
+    const adoProject = legacy.adoProject ?? ''
+    const adoRepo = legacy.adoRepo ?? ''
+    if (!adoOrg || !adoProject || !adoRepo) return
+
+    const profileId = randomUUID()
+    db.prepare(
+      `INSERT INTO repository_profiles (id, nickname, ado_org, ado_project, ado_repo)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(profileId, adoRepo, adoOrg, adoProject, adoRepo)
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES ('activeRepositoryProfileId', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(profileId)
+
+    let repositoryKeys = db
+      .prepare(
+        `SELECT DISTINCT repo
+         FROM pull_requests
+         WHERE repo = ? COLLATE NOCASE`
+      )
+      .all(adoRepo) as Array<{ repo: string }>
+    if (repositoryKeys.length === 0) {
+      const activeRepositoryKeys = db
+        .prepare('SELECT DISTINCT repo FROM pull_requests WHERE active = 1')
+        .all() as Array<{ repo: string }>
+      if (activeRepositoryKeys.length === 1) repositoryKeys = activeRepositoryKeys
+    }
+    if (repositoryKeys.length === 0) {
+      const allRepositoryKeys = db
+        .prepare('SELECT DISTINCT repo FROM pull_requests')
+        .all() as Array<{
+        repo: string
+      }>
+      if (allRepositoryKeys.length === 1) repositoryKeys = allRepositoryKeys
+    }
+    const assignProfile = db.prepare('UPDATE pull_requests SET repo = ? WHERE repo = ?')
+    for (const repositoryKey of repositoryKeys) {
+      assignProfile.run(profileId, repositoryKey.repo)
+    }
   }
 ]
 

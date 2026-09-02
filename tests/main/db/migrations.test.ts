@@ -59,7 +59,7 @@ describe('runMigrations', () => {
   it('migrates a fresh database to the latest version', () => {
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(13)
+    expect(database.pragma('user_version', { simple: true })).toBe(14)
   })
 
   it('creates every application table', () => {
@@ -71,6 +71,7 @@ describe('runMigrations', () => {
       'findings',
       'posted_comments',
       'pull_requests',
+      'repository_profiles',
       'review_runs',
       'reviews',
       'settings'
@@ -120,6 +121,10 @@ describe('runMigrations', () => {
         'created_findings',
         'contributed_findings'
       ]
+    ],
+    [
+      'repository_profiles',
+      ['id', 'nickname', 'ado_org', 'ado_project', 'ado_repo', 'created_at', 'archived_at']
     ],
     [
       'findings',
@@ -183,6 +188,7 @@ describe('runMigrations', () => {
       'idx_chat_messages_pr',
       'idx_findings_review',
       'idx_posted_comments_pr',
+      'idx_repository_profiles_nickname_active',
       'idx_review_runs_pr',
       'idx_reviews_pr'
     ])
@@ -221,7 +227,7 @@ describe('runMigrations', () => {
     expect(database.prepare('SELECT value FROM settings WHERE key = ?').pluck().get('theme')).toBe(
       'dark'
     )
-    expect(database.pragma('user_version', { simple: true })).toBe(13)
+    expect(database.pragma('user_version', { simple: true })).toBe(14)
   })
 
   it('does not downgrade a database with a newer schema version', () => {
@@ -242,6 +248,10 @@ describe('runMigrations', () => {
 
   it('backfills posted comments and finding models when upgrading version 6', () => {
     database.exec(`
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
       CREATE TABLE pull_requests (id INTEGER PRIMARY KEY);
       CREATE TABLE reviews (
         id INTEGER PRIMARY KEY,
@@ -286,7 +296,7 @@ describe('runMigrations', () => {
 
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(13)
+    expect(database.pragma('user_version', { simple: true })).toBe(14)
     expect(database.prepare('SELECT * FROM posted_comments').get()).toMatchObject({
       pr_id: 1,
       ado_thread_id: 400,
@@ -311,5 +321,125 @@ describe('runMigrations', () => {
       created_findings: '["F-001","F-002"]',
       contributed_findings: '[]'
     })
+  })
+
+  it('backfills the configured repository as a named profile without losing review history', () => {
+    database.exec(`
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE pull_requests (
+        id INTEGER PRIMARY KEY,
+        ado_pr_id INTEGER NOT NULL,
+        repo TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (ado_pr_id, repo)
+      );
+      CREATE TABLE reviews (
+        id INTEGER PRIMARY KEY,
+        pr_id INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE
+      );
+
+      INSERT INTO settings (key, value) VALUES
+        ('adoOrg', 'contoso'),
+        ('adoProject', 'DillonWay'),
+        ('adoRepo', 'web-app');
+      INSERT INTO pull_requests (id, ado_pr_id, repo) VALUES (1, 42, 'web-app');
+      INSERT INTO reviews (id, pr_id) VALUES (10, 1);
+      PRAGMA user_version = 13;
+    `)
+
+    runMigrations(database)
+
+    const profile = database.prepare('SELECT * FROM repository_profiles').get() as {
+      id: string
+      nickname: string
+      ado_org: string
+      ado_project: string
+      ado_repo: string
+    }
+    expect(profile).toMatchObject({
+      nickname: 'web-app',
+      ado_org: 'contoso',
+      ado_project: 'DillonWay',
+      ado_repo: 'web-app'
+    })
+    expect(profile.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(
+      database
+        .prepare("SELECT value FROM settings WHERE key = 'activeRepositoryProfileId'")
+        .pluck()
+        .get()
+    ).toBe(profile.id)
+    expect(database.prepare('SELECT repo FROM pull_requests WHERE id = 1').pluck().get()).toBe(
+      profile.id
+    )
+    expect(database.prepare('SELECT pr_id FROM reviews WHERE id = 10').pluck().get()).toBe(1)
+    expect(database.pragma('user_version', { simple: true })).toBe(14)
+  })
+
+  it('backfills cached PRs when the configured repository is an ID instead of its name', () => {
+    database.exec(`
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE pull_requests (
+        id INTEGER PRIMARY KEY,
+        ado_pr_id INTEGER NOT NULL,
+        repo TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (ado_pr_id, repo)
+      );
+
+      INSERT INTO settings (key, value) VALUES
+        ('adoOrg', 'contoso'),
+        ('adoProject', 'DillonWay'),
+        ('adoRepo', 'c16fd57b-1658-4aa0-b8e6-37d551f67f1a');
+      INSERT INTO pull_requests (id, ado_pr_id, repo, active) VALUES
+        (1, 42, 'web-app', 1),
+        (2, 41, 'web-app', 0);
+      PRAGMA user_version = 13;
+    `)
+
+    runMigrations(database)
+
+    const profileId = database.prepare('SELECT id FROM repository_profiles').pluck().get()
+    expect(database.prepare('SELECT DISTINCT repo FROM pull_requests').pluck().all()).toEqual([
+      profileId
+    ])
+  })
+
+  it('does not merge ambiguous legacy repository caches into the active profile', () => {
+    database.exec(`
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE pull_requests (
+        id INTEGER PRIMARY KEY,
+        ado_pr_id INTEGER NOT NULL,
+        repo TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (ado_pr_id, repo)
+      );
+
+      INSERT INTO settings (key, value) VALUES
+        ('adoOrg', 'contoso'),
+        ('adoProject', 'DillonWay'),
+        ('adoRepo', 'c16fd57b-1658-4aa0-b8e6-37d551f67f1a');
+      INSERT INTO pull_requests (id, ado_pr_id, repo, active) VALUES
+        (1, 42, 'web-app', 1),
+        (2, 42, 'api', 1);
+      PRAGMA user_version = 13;
+    `)
+
+    runMigrations(database)
+
+    expect(database.prepare('SELECT repo FROM pull_requests ORDER BY id').pluck().all()).toEqual([
+      'web-app',
+      'api'
+    ])
   })
 })
