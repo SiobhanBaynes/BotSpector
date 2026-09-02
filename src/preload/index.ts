@@ -55,7 +55,6 @@ const api = {
     ipcRenderer.invoke(IPC.repositoryProfileSelect, profileId),
   deleteRepositoryProfile: (profileId: string): Promise<IpcResult<Settings>> =>
     ipcRenderer.invoke(IPC.repositoryProfileDelete, profileId),
-  setAdoPat: (pat: string): Promise<IpcResult<Settings>> => ipcRenderer.invoke(IPC.setAdoPat, pat),
   detectIdentity: (): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.detectIdentity),
 
   // copilot

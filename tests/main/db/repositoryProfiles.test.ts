@@ -15,6 +15,7 @@ vi.mock('../../../src/main/db/db', () => ({
 import {
   deleteRepositoryProfile,
   getActiveRepositoryProfile,
+  getCurrentRepositoryProfileId,
   getSetting,
   listPullRequests,
   listRepositoryProfiles,
@@ -113,13 +114,17 @@ describe('repository profile persistence', () => {
     )
 
     selectRepositoryProfile(web.id)
-    const observedRepo = await withPullRequestProfile(prId, async () => {
+    const observed = await withPullRequestProfile(prId, async () => {
       selectRepositoryProfile(api.id)
       await Promise.resolve()
-      return getSetting('adoRepo')
+      return {
+        profileId: getCurrentRepositoryProfileId(),
+        adoRepo: getSetting('adoRepo')
+      }
     })
 
-    expect(observedRepo).toBe('web-app')
+    expect(observed).toEqual({ profileId: web.id, adoRepo: 'web-app' })
+    expect(getCurrentRepositoryProfileId()).toBe(api.id)
     expect(getSetting('adoRepo')).toBe('api')
   })
 

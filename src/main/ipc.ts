@@ -31,6 +31,7 @@ import { secrets } from './secrets'
 import * as repo from './db/repo'
 import * as auth from './copilot/auth'
 import { listModels } from './copilot/client'
+import { disconnect as disconnectAdoClients } from './mcp/adoClient'
 import {
   listPullRequests,
   fetchPullRequestDescription,
@@ -65,6 +66,7 @@ import {
   refineComment,
   reviewPullRequest
 } from './agent/reviewer'
+import { buildResolutionEvidence, type ResolutionFileVersion } from './agent/resolutionEvidence'
 import { GENERAL_SKILL_ID, getSkill, listAllSkills, skillOverrideSettingKey } from './agent/skills'
 import {
   importSkillFromFolder,
@@ -153,15 +155,19 @@ async function syncCommentThreads(prId: number): Promise<void> {
 }
 
 function readSettings(): Settings {
+  const activeRepositoryProfileId = repo.getActiveRepositoryProfile()?.id ?? null
   return {
     adoOrg: repo.getSetting('adoOrg'),
     adoProject: repo.getSetting('adoProject'),
     adoRepo: repo.getSetting('adoRepo'),
-    repositoryProfiles: repo.listRepositoryProfiles(),
-    activeRepositoryProfileId: repo.getActiveRepositoryProfile()?.id ?? null,
+    repositoryProfiles: repo.listRepositoryProfiles().map((profile) => ({
+      ...profile,
+      hasAdoPat: !!secrets.getAdoPat(profile.id)
+    })),
+    activeRepositoryProfileId,
     model: repo.getSetting('model'),
     myIdentity: repo.getSetting('myIdentity'),
-    hasAdoPat: !!secrets.getAdoPat(),
+    hasAdoPat: !!secrets.getAdoPat(activeRepositoryProfileId),
     copilotConnected: auth.isSignedIn()
   }
 }
@@ -191,6 +197,8 @@ function handleFinding<Args extends unknown[], Result>(
 }
 
 export function registerIpcHandlers(): void {
+  secrets.migrateLegacyAdoPat(repo.listRepositoryProfiles().map((profile) => profile.id))
+
   // ---- settings ----
   ipcMain.handle(IPC.settingsGet, (): IpcResult<Settings> => ok(readSettings()))
 
@@ -209,9 +217,19 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.repositoryProfileSave,
-    (_e, profileId: string | null, input: RepositoryProfileInput): IpcResult<Settings> => {
+    async (
+      _e,
+      profileId: string | null,
+      input: RepositoryProfileInput
+    ): Promise<IpcResult<Settings>> => {
       try {
-        repo.saveRepositoryProfile(profileId, input)
+        const pat = typeof input.pat === 'string' ? input.pat.trim() : ''
+        if (pat) secrets.assertSecureStorageAvailable()
+        const saved = repo.saveRepositoryProfile(profileId, input)
+        if (pat) {
+          secrets.setAdoPat(saved.id, pat)
+          await disconnectAdoClients()
+        }
         return ok(readSettings())
       } catch (e) {
         return fail(e)
@@ -228,14 +246,19 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle(IPC.repositoryProfileDelete, (_e, profileId: string): IpcResult<Settings> => {
-    try {
-      repo.deleteRepositoryProfile(profileId)
-      return ok(readSettings())
-    } catch (e) {
-      return fail(e)
+  ipcMain.handle(
+    IPC.repositoryProfileDelete,
+    async (_e, profileId: string): Promise<IpcResult<Settings>> => {
+      try {
+        repo.deleteRepositoryProfile(profileId)
+        secrets.setAdoPat(profileId, null)
+        await disconnectAdoClients()
+        return ok(readSettings())
+      } catch (e) {
+        return fail(e)
+      }
     }
-  })
+  )
 
   ipcMain.handle(IPC.detectIdentity, async (): Promise<IpcResult<string>> => {
     try {
@@ -243,15 +266,6 @@ export function registerIpcHandlers(): void {
       if (!name) throw new Error('Could not determine your Azure DevOps display name')
       repo.setSetting('myIdentity', name)
       return ok(name)
-    } catch (e) {
-      return fail(e)
-    }
-  })
-
-  ipcMain.handle(IPC.setAdoPat, (_e, pat: string): IpcResult<Settings> => {
-    try {
-      secrets.setAdoPat(pat ? pat : null)
-      return ok(readSettings())
     } catch (e) {
       return fail(e)
     }
@@ -1171,56 +1185,42 @@ export function registerIpcHandlers(): void {
         const review = repo.getReviewById(finding.reviewId)
         const pr = review ? repo.getPullRequest(review.prId) : null
 
-        // Pull the CURRENT (head) version of the file so the AI can see whether
-        // the latest commit addresses the finding — not the version we reviewed.
-        // Use the full-file diff (with gap markers) rather than a narrow window
-        // around finding.line, so the model can spot a fix even if it landed
-        // elsewhere in the file (a common cause of false "unclear" verdicts).
-        let codeText = ''
-        if (finding.filePath && pr) {
+        // Compare every relevant changed file so fixes made at another layer
+        // (for example, at a caller rather than the commented helper) are visible.
+        let diffEvidence = ''
+        if (pr) {
           const range = await fetchPullRequestDiffRange(pr.adoPrId).catch(() => null)
           const headCommit = range?.head || pr.headCommit || undefined
           const baseCommit = range?.base || undefined
-          const after =
-            (await fetchFileContent(finding.filePath, {
-              commit: headCommit,
-              branch: pr.sourceBranch || undefined
-            }).catch(() => null)) ?? ''
-          const before = baseCommit
-            ? ((await fetchFileContent(finding.filePath, { commit: baseCommit }).catch(
-                () => null
-              )) ?? '')
-            : ''
-          if (before === '' && after === '') {
-            codeText = ''
-          } else {
-            const fileDiff = buildFileDiff(finding.filePath, before, after)
-            if (fileDiff.lines.length === 0) {
-              codeText = '(file unchanged in this PR)'
-            } else {
-              const text = fileDiff.lines
-                .map((ln) => {
-                  const sign =
-                    ln.kind === 'add'
-                      ? '+'
-                      : ln.kind === 'del'
-                        ? '-'
-                        : ln.kind === 'gap'
-                          ? ' '
-                          : ' '
-                  return `${sign}${ln.text}`
-                })
-                .join('\n')
-              // Cap to keep the prompt sane on huge files. Truncation is
-              // preferable to a narrow window because it still keeps the added
-              // and removed lines interleaved with their surrounding context.
-              const MAX_CODE_CHARS = 12000
-              codeText =
-                text.length > MAX_CODE_CHARS
-                  ? text.slice(0, MAX_CODE_CHARS) + '\n… (diff truncated)'
-                  : text
-            }
-          }
+          const changedPaths =
+            baseCommit && headCommit
+              ? (await fetchChangedFiles(baseCommit, headCommit).catch(() => [])).map(
+                  (file) => file.path
+                )
+              : []
+          const seenPaths = new Set<string>()
+          const paths = [finding.filePath, ...changedPaths]
+            .filter((path): path is string => !!path)
+            .filter((path) => {
+              const normalized = path.replace(/^\/+/, '')
+              if (seenPaths.has(normalized)) return false
+              seenPaths.add(normalized)
+              return true
+            })
+            .slice(0, 20)
+          const files: ResolutionFileVersion[] = []
+          await mapWithConcurrency(paths, 4, async (path) => {
+            const after =
+              (await fetchFileContent(path, {
+                commit: headCommit,
+                branch: pr.sourceBranch || undefined
+              }).catch(() => null)) ?? ''
+            const before = baseCommit
+              ? ((await fetchFileContent(path, { commit: baseCommit }).catch(() => null)) ?? '')
+              : ''
+            files.push({ path, before, after })
+          })
+          diffEvidence = buildResolutionEvidence(files, finding.filePath)
         }
 
         const assessment = await assessFindingResolution(
@@ -1228,7 +1228,7 @@ export function registerIpcHandlers(): void {
             finding,
             commentText: finding.comment.draftText,
             replies: finding.comment.replies,
-            codeText
+            diffEvidence
           },
           model
         )

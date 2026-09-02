@@ -1,7 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { createHash } from 'crypto'
 import { secrets } from '../secrets'
-import { getSetting } from '../db/repo'
+import { getCurrentRepositoryProfileId, getSetting } from '../db/repo'
 import { getNpxCommand } from '../fixPath'
 import {
   buildArgs as buildToolArgs,
@@ -35,12 +36,13 @@ interface ConnectionConfig {
 const connections = new Map<string, ConnectionState>()
 
 function currentKey(org: string, pat: string): string {
-  return `${org}::${pat.slice(0, 6)}:${pat.length}`
+  const credentialHash = createHash('sha256').update(pat).digest('hex')
+  return `${org}::${credentialHash}`
 }
 
 function currentConfig(): ConnectionConfig {
   const org = getSetting('adoOrg')
-  const pat = secrets.getAdoPat()
+  const pat = secrets.getAdoPat(getCurrentRepositoryProfileId())
   if (!org) throw new Error('Azure DevOps organization is not set')
   if (!pat) throw new Error('Azure DevOps PAT is not set')
   return { key: currentKey(org, pat), org, pat }

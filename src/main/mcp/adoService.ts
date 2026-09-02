@@ -1,5 +1,6 @@
 import { buildArgs, callTool, findTool, parseJsonFromText } from './adoClient'
-import { getSetting } from '../db/repo'
+import { createHash } from 'crypto'
+import { getCurrentRepositoryProfileId, getSetting } from '../db/repo'
 import { secrets } from '../secrets'
 import type {
   AdoCommentThread,
@@ -16,6 +17,10 @@ import type {
  */
 
 type AnyRecord = Record<string, unknown>
+
+function currentAdoPat(): string | null {
+  return secrets.getAdoPat(getCurrentRepositoryProfileId())
+}
 
 function asArray(value: unknown): AnyRecord[] {
   if (Array.isArray(value)) return value as AnyRecord[]
@@ -47,7 +52,7 @@ function webUrl(org: string, project: string, repo: string, prId: number): strin
  */
 export async function fetchCurrentUserDisplayName(): Promise<string | null> {
   const org = getSetting('adoOrg')
-  const pat = secrets.getAdoPat()
+  const pat = currentAdoPat()
   if (!org || !pat) return null
 
   const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
@@ -72,18 +77,22 @@ function restConfig(): { org: string; project: string; repo: string; auth: strin
   const org = getSetting('adoOrg')
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
-  const pat = secrets.getAdoPat()
+  const pat = currentAdoPat()
   if (!org || !repo || !pat) return null
   return { org, project, repo, auth: Buffer.from(`:${pat}`, 'utf-8').toString('base64') }
 }
 
 /** The current user's Azure DevOps id (GUID), needed to cast a reviewer vote. */
-let cachedUserId: string | null = null
+const cachedUserIds = new Map<string, string>()
 export async function fetchCurrentUserId(): Promise<string | null> {
-  if (cachedUserId) return cachedUserId
   const org = getSetting('adoOrg')
-  const pat = secrets.getAdoPat()
-  if (!org || !pat) return null
+  const profileId = getCurrentRepositoryProfileId()
+  const pat = currentAdoPat()
+  if (!org || !profileId || !pat) return null
+  const credentialHash = createHash('sha256').update(pat).digest('hex')
+  const cacheKey = `${profileId}:${credentialHash}`
+  const cachedUserId = cachedUserIds.get(cacheKey)
+  if (cachedUserId) return cachedUserId
   const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
   const res = await fetch(
     `https://dev.azure.com/${org}/_apis/connectionData?api-version=7.1-preview`,
@@ -93,8 +102,9 @@ export async function fetchCurrentUserId(): Promise<string | null> {
   )
   if (!res.ok) return null
   const data = (await res.json()) as { authenticatedUser?: { id?: string } }
-  cachedUserId = data.authenticatedUser?.id ?? null
-  return cachedUserId
+  const userId = data.authenticatedUser?.id ?? null
+  if (userId) cachedUserIds.set(cacheKey, userId)
+  return userId
 }
 
 function prRestUrl(cfg: { org: string; project: string; repo: string }, adoPrId: number): string {
@@ -408,7 +418,7 @@ export async function fetchChangedFiles(
   const org = getSetting('adoOrg')
   const project = getSetting('adoProject')
   const repo = getSetting('adoRepo')
-  const pat = secrets.getAdoPat()
+  const pat = currentAdoPat()
   if (!org || !repo || !pat) return []
 
   const auth = Buffer.from(`:${pat}`, 'utf-8').toString('base64')
@@ -506,7 +516,15 @@ async function listPullRequestsRest(): Promise<PrListItem[] | null> {
   const res = await fetch(url, {
     headers: { Authorization: `Basic ${cfg.auth}`, Accept: 'application/json' }
   })
-  if (!res.ok) throw new Error(`Could not list pull requests (${res.status})`)
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `Azure DevOps rejected the PAT for ${cfg.project}/${cfg.repo} (${res.status}). ` +
+          "Update this repository profile's PAT in Settings and ensure it has Code: Read and Pull Request: Read."
+      )
+    }
+    throw new Error(`Could not list pull requests (${res.status})`)
+  }
   const data = (await res.json()) as { value?: AnyRecord[] }
   return (data.value ?? []).map((r) => mapPullRequestRow(r, cfg.org, cfg.project, cfg.repo))
 }
@@ -534,7 +552,7 @@ export async function listPullRequests(): Promise<
   // Prefer the REST API (honours the PAT and is always available) and fall back
   // to an MCP tool only if REST isn't configured. The MCP server doesn't always
   // expose a pull-request-list tool, which previously broke the whole queue.
-  const rows = await listPullRequestsRest().catch(() => null)
+  const rows = await listPullRequestsRest()
   if (rows) return rows
 
   const tool =
@@ -822,7 +840,7 @@ function imageMimeFromPath(pathname: string): string {
  * to an arbitrary URL that might appear in a description.
  */
 export async function fetchImageAsDataUrl(rawUrl: string): Promise<string | null> {
-  const pat = secrets.getAdoPat()
+  const pat = currentAdoPat()
   if (!pat) return null
 
   let url: URL

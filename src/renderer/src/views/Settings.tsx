@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type {
   CopilotModel,
   DeviceCodeInfo,
-  RepositoryProfile,
+  RepositoryProfileSummary,
   Settings,
   Skill
 } from '../../../shared/types'
@@ -17,6 +17,7 @@ interface Props {
 
 export function SettingsView({ settings, onChange, theme, onThemeChange }: Props): JSX.Element {
   const [repositoryProfileId, setRepositoryProfileId] = useState<string | null>(null)
+  const [repositoryEditorMode, setRepositoryEditorMode] = useState<'add' | 'edit' | null>(null)
   const [repositoryNickname, setRepositoryNickname] = useState('')
   const [adoOrg, setAdoOrg] = useState('')
   const [adoProject, setAdoProject] = useState('')
@@ -38,14 +39,6 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
   useEffect(() => {
     if (!settings) return
-    const activeProfile = settings.repositoryProfiles.find(
-      (profile) => profile.id === settings.activeRepositoryProfileId
-    )
-    setRepositoryProfileId(activeProfile?.id ?? null)
-    setRepositoryNickname(activeProfile?.nickname ?? '')
-    setAdoOrg(settings.adoOrg)
-    setAdoProject(settings.adoProject)
-    setAdoRepo(settings.adoRepo)
     setModel(settings.model)
     setMyIdentity(settings.myIdentity)
   }, [settings])
@@ -172,43 +165,68 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     else setError(res.error)
   }
 
-  function editRepositoryProfile(profile: RepositoryProfile): void {
-    setRepositoryProfileId(profile.id)
-    setRepositoryNickname(profile.nickname)
-    setAdoOrg(profile.adoOrg)
-    setAdoProject(profile.adoProject)
-    setAdoRepo(profile.adoRepo)
-    setMessage(null)
-    setError(null)
-  }
-
-  function addRepositoryProfile(): void {
+  function closeRepositoryProfileEditor(): void {
+    setRepositoryEditorMode(null)
     setRepositoryProfileId(null)
     setRepositoryNickname('')
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setPat('')
+  }
+
+  function editRepositoryProfile(profile: RepositoryProfileSummary): void {
+    if (repositoryEditorMode === 'edit' && repositoryProfileId === profile.id) {
+      closeRepositoryProfileEditor()
+      return
+    }
+    setRepositoryEditorMode('edit')
+    setRepositoryProfileId(profile.id)
+    setRepositoryNickname(profile.nickname)
+    setAdoOrg(profile.adoOrg)
+    setAdoProject(profile.adoProject)
+    setAdoRepo(profile.adoRepo)
+    setPat('')
+    setMessage(null)
+    setError(null)
+  }
+
+  function addRepositoryProfile(): void {
+    if (repositoryEditorMode === 'add') {
+      closeRepositoryProfileEditor()
+      return
+    }
+    setRepositoryEditorMode('add')
+    setRepositoryProfileId(null)
+    setRepositoryNickname('')
+    setAdoOrg('')
+    setAdoProject('')
+    setAdoRepo('')
+    setPat('')
     setMessage(null)
     setError(null)
   }
 
   async function saveRepositoryProfile(): Promise<void> {
+    const nickname = repositoryNickname.trim()
     setBusy(true)
     setError(null)
     const res = await window.api.saveRepositoryProfile(repositoryProfileId, {
       nickname: repositoryNickname,
       adoOrg,
       adoProject,
-      adoRepo
+      adoRepo,
+      ...(pat.trim() ? { pat: pat.trim() } : {})
     })
     setBusy(false)
     if (res.ok) {
-      setMessage(`Repository profile “${repositoryNickname.trim()}” saved.`)
+      closeRepositoryProfileEditor()
+      setMessage(`Repository profile “${nickname}” saved.`)
       await onChange()
     } else setError(res.error)
   }
 
-  async function deleteRepositoryProfile(profile: RepositoryProfile): Promise<void> {
+  async function deleteRepositoryProfile(profile: RepositoryProfileSummary): Promise<void> {
     const confirmed = window.confirm(
       `Remove “${profile.nickname}”? Its stored pull requests and review history will be kept.`
     )
@@ -218,19 +236,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     const res = await window.api.deleteRepositoryProfile(profile.id)
     setBusy(false)
     if (res.ok) {
+      if (repositoryProfileId === profile.id) closeRepositoryProfileEditor()
       setMessage(`Removed repository profile “${profile.nickname}”.`)
-      await onChange()
-    } else setError(res.error)
-  }
-
-  async function savePat(): Promise<void> {
-    if (!pat) return
-    setBusy(true)
-    const res = await window.api.setAdoPat(pat)
-    setBusy(false)
-    if (res.ok) {
-      setPat('')
-      setMessage('PAT saved securely.')
       await onChange()
     } else setError(res.error)
   }
@@ -274,6 +281,88 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     await window.api.copilotSignOut()
     setModels([])
     await onChange()
+  }
+
+  function repositoryProfileEditor(heading: string, editorId: string): JSX.Element {
+    const hasStoredPat = settings?.repositoryProfiles.find(
+      (profile) => profile.id === repositoryProfileId
+    )?.hasAdoPat
+
+    return (
+      <div className="repository-profile-editor" id={editorId}>
+        <h3>{heading}</h3>
+        <div className="repository-profile-editor-fields">
+          <label>
+            Nickname
+            <input
+              value={repositoryNickname}
+              onChange={(event) => setRepositoryNickname(event.target.value)}
+              placeholder="Website"
+            />
+          </label>
+          <label>
+            Organization
+            <input
+              value={adoOrg}
+              onChange={(event) => setAdoOrg(event.target.value)}
+              placeholder="contoso"
+            />
+          </label>
+          <label>
+            Project
+            <input
+              value={adoProject}
+              onChange={(event) => setAdoProject(event.target.value)}
+              placeholder="MyProject"
+            />
+          </label>
+          <label>
+            Repository
+            <input
+              value={adoRepo}
+              onChange={(event) => setAdoRepo(event.target.value)}
+              placeholder="my-repo"
+            />
+          </label>
+          <label className="repository-pat-field">
+            Personal Access Token
+            <input
+              type="password"
+              value={pat}
+              onChange={(event) => setPat(event.target.value)}
+              placeholder={
+                repositoryEditorMode === 'edit' && hasStoredPat
+                  ? 'Stored securely; enter a new PAT to replace it'
+                  : 'Paste PAT (Code: Read; Pull Request: Read)'
+              }
+            />
+          </label>
+        </div>
+        <p className="muted small">
+          The PAT is encrypted and stored only for this repository profile. Leave it blank when
+          editing to keep the stored PAT. Repository details become fixed after pull requests are
+          stored, keeping review history attached to the right repository.
+        </p>
+        <div className="row repository-profile-editor-actions">
+          <button
+            className="btn primary"
+            onClick={saveRepositoryProfile}
+            disabled={
+              busy ||
+              !repositoryNickname.trim() ||
+              !adoOrg.trim() ||
+              !adoProject.trim() ||
+              !adoRepo.trim()
+            }
+          >
+            Save repository
+          </button>
+          <button className="btn" onClick={closeRepositoryProfileEditor} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -462,105 +551,78 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
               Name repositories so you can switch between them from the sidebar.
             </p>
           </div>
-          <button className="btn" onClick={addRepositoryProfile} disabled={busy}>
-            Add repository
+          <button
+            className="btn"
+            onClick={addRepositoryProfile}
+            disabled={busy}
+            aria-expanded={repositoryEditorMode === 'add'}
+            aria-controls="new-repository-profile-editor"
+          >
+            {repositoryEditorMode === 'add' ? 'Cancel' : 'Add repository'}
           </button>
         </div>
         {settings?.repositoryProfiles.length ? (
           <div className="repository-profile-list">
-            {settings.repositoryProfiles.map((profile) => (
-              <div
-                className={
-                  profile.id === settings.activeRepositoryProfileId
-                    ? 'repository-profile-row active'
-                    : 'repository-profile-row'
-                }
-                key={profile.id}
-              >
-                <div className="repository-profile-details">
-                  <strong>{profile.nickname}</strong>
-                  <span>
-                    {profile.adoOrg} / {profile.adoProject} / {profile.adoRepo}
-                  </span>
+            {settings.repositoryProfiles.map((profile) => {
+              const isExpanded =
+                repositoryEditorMode === 'edit' && repositoryProfileId === profile.id
+              const className = [
+                'repository-profile-item',
+                profile.id === settings.activeRepositoryProfileId ? 'active' : '',
+                isExpanded ? 'expanded' : ''
+              ]
+                .filter(Boolean)
+                .join(' ')
+
+              return (
+                <div className={className} key={profile.id}>
+                  <div className="repository-profile-row">
+                    <div className="repository-profile-details">
+                      <strong>{profile.nickname}</strong>
+                      <span>
+                        {profile.adoOrg} / {profile.adoProject} / {profile.adoRepo}
+                      </span>
+                    </div>
+                    <div className="repository-profile-actions">
+                      <span className={profile.hasAdoPat ? 'badge on' : 'badge'}>
+                        {profile.hasAdoPat ? 'PAT saved' : 'PAT missing'}
+                      </span>
+                      {profile.id === settings.activeRepositoryProfileId && (
+                        <span className="badge on">Active</span>
+                      )}
+                      <button
+                        className="btn subtle"
+                        onClick={() => editRepositoryProfile(profile)}
+                        disabled={busy}
+                        aria-expanded={isExpanded}
+                        aria-controls={`repository-profile-editor-${profile.id}`}
+                      >
+                        {isExpanded ? 'Close' : 'Edit'}
+                      </button>
+                      <button
+                        className="btn danger"
+                        onClick={() => void deleteRepositoryProfile(profile)}
+                        disabled={busy}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  {isExpanded &&
+                    repositoryProfileEditor(
+                      `Edit ${profile.nickname}`,
+                      `repository-profile-editor-${profile.id}`
+                    )}
                 </div>
-                <div className="repository-profile-actions">
-                  {profile.id === settings.activeRepositoryProfileId && (
-                    <span className="badge on">Active</span>
-                  )}
-                  <button
-                    className="btn subtle"
-                    onClick={() => editRepositoryProfile(profile)}
-                    disabled={busy}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn danger"
-                    onClick={() => void deleteRepositoryProfile(profile)}
-                    disabled={busy}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         ) : (
           <p className="muted">No repository profiles yet.</p>
         )}
 
-        <div className="repository-profile-editor">
-          <h3>{repositoryProfileId ? 'Edit repository' : 'Add repository'}</h3>
-          <label>
-            Nickname
-            <input
-              value={repositoryNickname}
-              onChange={(event) => setRepositoryNickname(event.target.value)}
-              placeholder="Website"
-            />
-          </label>
-          <label>
-            Organization
-            <input
-              value={adoOrg}
-              onChange={(e) => setAdoOrg(e.target.value)}
-              placeholder="contoso"
-            />
-          </label>
-          <label>
-            Project
-            <input
-              value={adoProject}
-              onChange={(e) => setAdoProject(e.target.value)}
-              placeholder="MyProject"
-            />
-          </label>
-          <label>
-            Repository
-            <input
-              value={adoRepo}
-              onChange={(e) => setAdoRepo(e.target.value)}
-              placeholder="my-repo"
-            />
-          </label>
-          <p className="muted small">
-            Repository details become fixed after pull requests are stored, keeping review history
-            attached to the right repository.
-          </p>
-          <button
-            className="btn primary"
-            onClick={saveRepositoryProfile}
-            disabled={
-              busy ||
-              !repositoryNickname.trim() ||
-              !adoOrg.trim() ||
-              !adoProject.trim() ||
-              !adoRepo.trim()
-            }
-          >
-            Save repository
-          </button>
-        </div>
+        {repositoryEditorMode === 'add' &&
+          repositoryProfileEditor('Add repository', 'new-repository-profile-editor')}
       </section>
 
       <section className="card">
@@ -585,25 +647,6 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
             Detect from Azure DevOps
           </button>
         </div>
-      </section>
-
-      <section className="card">
-        <h2>Azure DevOps PAT</h2>
-        <p className="muted">
-          {settings?.hasAdoPat ? 'A PAT is stored securely.' : 'No PAT stored yet.'}
-        </p>
-        <label>
-          Personal Access Token
-          <input
-            type="password"
-            value={pat}
-            onChange={(e) => setPat(e.target.value)}
-            placeholder="Paste PAT (Code: Read; Pull Request: Read)"
-          />
-        </label>
-        <button className="btn primary" onClick={savePat} disabled={busy || !pat}>
-          Save PAT
-        </button>
       </section>
 
       <section className="card">

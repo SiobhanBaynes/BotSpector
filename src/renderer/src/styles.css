@@ -335,15 +335,17 @@ h1 {
 .repository-profile-list {
   border-top: 1px solid var(--border);
 }
+.repository-profile-item {
+  border-bottom: 1px solid var(--border);
+}
 .repository-profile-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border);
 }
-.repository-profile-row.active .repository-profile-details strong {
+.repository-profile-item.active .repository-profile-details strong {
   color: var(--accent);
 }
 .repository-profile-details {
@@ -369,13 +371,29 @@ h1 {
   padding: 5px 8px;
 }
 .repository-profile-editor {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+  margin: 4px 0 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
 }
 .repository-profile-editor h3 {
   margin: 0 0 12px;
   font-size: 14px;
+}
+.repository-profile-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px;
+}
+.repository-profile-editor-fields .repository-pat-field {
+  grid-column: 1 / -1;
+}
+.repository-profile-editor .small {
+  margin-bottom: 12px;
+}
+.repository-profile-editor-actions {
+  gap: 8px;
 }
 .device .code {
   font-size: 26px;

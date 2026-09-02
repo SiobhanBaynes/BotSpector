@@ -12,9 +12,26 @@ interface SecretStoreShape {
 }
 
 const SECRET_KEYS = {
-  adoPat: 'adoPat',
+  legacyAdoPat: 'adoPat',
+  legacyAdoPatMigrationBlocked: 'adoPatMigrationBlocked',
   githubToken: 'githubToken'
 } as const
+
+const SECURE_STORAGE_ERROR =
+  'Secure credential storage is unavailable. Configure an OS-backed keychain and restart BotSpector.'
+
+function isSecureStorageAvailable(): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false
+  return process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text'
+}
+
+function assertSecureStorageAvailable(): void {
+  if (!isSecureStorageAvailable()) throw new Error(SECURE_STORAGE_ERROR)
+}
+
+function adoPatKey(profileId: string): string {
+  return `adoPat:${profileId}`
+}
 
 function secretsPath(): string {
   const dir = app.getPath('userData')
@@ -40,11 +57,9 @@ function setSecret(key: string, value: string | null): void {
   const store = readStore()
   if (value === null || value === '') {
     delete store[key]
-  } else if (safeStorage.isEncryptionAvailable()) {
-    store[key] = safeStorage.encryptString(value).toString('base64')
   } else {
-    // Fallback: base64 (not secure, but keeps app functional on unsupported OS).
-    store[key] = Buffer.from(value, 'utf-8').toString('base64')
+    assertSecureStorageAvailable()
+    store[key] = safeStorage.encryptString(value).toString('base64')
   }
   writeStore(store)
 }
@@ -52,21 +67,37 @@ function setSecret(key: string, value: string | null): void {
 function getSecret(key: string): string | null {
   const store = readStore()
   const raw = store[key]
-  if (!raw) return null
+  if (!raw || !isSecureStorageAvailable()) return null
   const buf = Buffer.from(raw, 'base64')
   try {
-    if (safeStorage.isEncryptionAvailable()) {
-      return safeStorage.decryptString(buf)
-    }
-    return buf.toString('utf-8')
+    return safeStorage.decryptString(buf)
   } catch {
     return null
   }
 }
 
 export const secrets = {
-  setAdoPat: (pat: string | null) => setSecret(SECRET_KEYS.adoPat, pat),
-  getAdoPat: () => getSecret(SECRET_KEYS.adoPat),
+  assertSecureStorageAvailable,
+  setAdoPat: (profileId: string, pat: string | null) => setSecret(adoPatKey(profileId), pat),
+  getAdoPat: (profileId: string | null) => (profileId ? getSecret(adoPatKey(profileId)) : null),
+  migrateLegacyAdoPat: (profileIds: string[]) => {
+    if (getSecret(SECRET_KEYS.legacyAdoPatMigrationBlocked)) {
+      setSecret(SECRET_KEYS.legacyAdoPat, null)
+      return
+    }
+    const legacyPat = getSecret(SECRET_KEYS.legacyAdoPat)
+    if (!legacyPat) return
+    const uniqueProfileIds = [...new Set(profileIds)]
+    if (uniqueProfileIds.length === 0) return
+    if (uniqueProfileIds.length > 1) {
+      setSecret(SECRET_KEYS.legacyAdoPatMigrationBlocked, 'true')
+      setSecret(SECRET_KEYS.legacyAdoPat, null)
+      return
+    }
+    const profileId = uniqueProfileIds[0]
+    if (!getSecret(adoPatKey(profileId))) setSecret(adoPatKey(profileId), legacyPat)
+    setSecret(SECRET_KEYS.legacyAdoPat, null)
+  },
   setGithubToken: (token: string | null) => setSecret(SECRET_KEYS.githubToken, token),
   getGithubToken: () => getSecret(SECRET_KEYS.githubToken)
 }

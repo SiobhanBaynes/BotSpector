@@ -87,7 +87,7 @@ export function App(): JSX.Element {
         </nav>
         <div className="status">
           <StatusDot label="Copilot" on={!!settings?.copilotConnected} />
-          <StatusDot label="Azure DevOps PAT" on={!!settings?.hasAdoPat} />
+          <StatusDot label="Repository PAT" on={!!settings?.hasAdoPat} />
           <div className="status-model">{settings?.model || 'No model selected'}</div>
         </div>
       </aside>
@@ -105,7 +105,7 @@ export function App(): JSX.Element {
           <div className="empty">
             <h2>Let’s get BotSpector snooping 🔍</h2>
             <p>
-              First, sign in to GitHub Copilot, add your Azure DevOps PAT and a repository profile,
+              First, sign in to GitHub Copilot, add a repository profile with its Azure DevOps PAT,
               and pick a model in{' '}
               <button className="link" onClick={() => setTab('settings')}>
                 Settings

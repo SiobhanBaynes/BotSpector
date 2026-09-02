@@ -27,13 +27,23 @@ export interface RepositoryProfile {
   adoRepo: string
 }
 
-export type RepositoryProfileInput = Omit<RepositoryProfile, 'id'>
+export interface RepositoryProfileSummary extends RepositoryProfile {
+  hasAdoPat: boolean
+}
+
+export interface RepositoryProfileInput {
+  nickname: string
+  adoOrg: string
+  adoProject: string
+  adoRepo: string
+  pat?: string
+}
 
 export interface Settings {
   adoOrg: string
   adoProject: string
   adoRepo: string
-  repositoryProfiles: RepositoryProfile[]
+  repositoryProfiles: RepositoryProfileSummary[]
   activeRepositoryProfileId: string | null
   model: string
   myIdentity: string

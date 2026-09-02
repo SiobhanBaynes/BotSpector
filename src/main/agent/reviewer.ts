@@ -763,15 +763,15 @@ export async function assessFindingResolution(
     finding: Finding
     commentText: string
     replies: CommentReply[]
-    codeText: string
+    diffEvidence: string
   },
   model: string
 ): Promise<ResolutionAssessment> {
-  const { finding, commentText, replies, codeText } = input
+  const { finding, commentText, replies, diffEvidence } = input
   const conversation = replies.length
     ? replies.map((r) => `${r.author}: ${r.text}`).join('\n\n')
     : '(no replies)'
-  const hasCode = codeText.trim().length > 0
+  const hasEvidence = diffEvidence.trim().length > 0
   const result = await complete({
     model,
     temperature: 0.1,
@@ -779,13 +779,13 @@ export async function assessFindingResolution(
       {
         role: 'system',
         content:
-          'You judge whether a code-review finding has been resolved. The diff of the ' +
-          'file (base → head) is the primary evidence: base your verdict on what the code ' +
+          'You judge whether a code-review finding has been resolved. The PR-wide changed-file ' +
+          'diffs (base → head) are the primary evidence: base your verdict on what the code ' +
           'actually shows. Author replies are only weak hints — they cannot make a finding ' +
           '"resolved" on their own if the code does not show the fix.\n\n' +
           'Important:\n' +
-          '- The fix may appear anywhere in the diff, not necessarily on the line the ' +
-          'finding originally pointed to. Read the whole diff before deciding.\n' +
+          '- The fix may appear in any changed file, not necessarily in the file or line the ' +
+          'finding originally pointed to. Read all supplied file diffs before deciding.\n' +
           '- An equivalent fix (renamed helper, refactored guard, moved logic) still ' +
           'counts as resolved.\n' +
           '- Do NOT require a perfect literal match; ask whether the concern in the ' +
@@ -793,11 +793,11 @@ export async function assessFindingResolution(
           'Decision rules:\n' +
           '- "resolved": the current code addresses the finding (directly or via an ' +
           'equivalent change). Briefly reference the change that fixes it.\n' +
-          '- "unresolved": the file is unchanged in the relevant area, or the code still ' +
+          '- "unresolved": no supplied change addresses the concern, or the code still ' +
           'exhibits the problem, or the reply promises a fix that is not present.\n' +
-          '- "unclear": use ONLY when the diff is missing/empty, or the change is genuinely ' +
-          'ambiguous. Do not use "unclear" just because the fix is elsewhere in the file — ' +
-          'in that case, pick "resolved" or "unresolved" based on the diff.\n\n' +
+          '- "unclear": use ONLY when the diff evidence is missing/incomplete, or the change ' +
+          'is genuinely ambiguous. Do not use "unclear" just because the fix is in another ' +
+          'file — in that case, pick "resolved" or "unresolved" based on all supplied diffs.\n\n' +
           'Do NOT mark a finding "resolved" purely because the author said so. If the code ' +
           'contradicts the reply, trust the code.\n\n' +
           'Respond ONLY with a JSON object of the form ' +
@@ -810,8 +810,8 @@ export async function assessFindingResolution(
           `Finding [${finding.bucket}] ${finding.title}\n` +
           `${finding.description}\n` +
           `File: ${finding.filePath ?? 'n/a'}${finding.line ? ` (originally line ${finding.line})` : ''}\n\n` +
-          `Full-file diff base → head (primary evidence):\n` +
-          `${hasCode ? codeText : '(unavailable — prefer "unclear" unless the reply itself contradicts a fix)'}\n\n` +
+          `PR-wide changed-file diffs base → head (primary evidence):\n` +
+          `${hasEvidence ? diffEvidence : '(unavailable — prefer "unclear" unless the reply itself contradicts a fix)'}\n\n` +
           `Review comment we posted (context only):\n${commentText}\n\n` +
           `Author replies (hint only, do not rely on):\n${conversation}`
       }

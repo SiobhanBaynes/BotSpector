@@ -126,6 +126,10 @@ export function getActiveRepositoryProfile(): RepositoryProfile | null {
   return profileId ? profileFromDb(profileId) : null
 }
 
+export function getCurrentRepositoryProfileId(): string | null {
+  return repositoryProfileContext.getStore()?.id ?? getActiveRepositoryProfile()?.id ?? null
+}
+
 export function withRepositoryProfile<T>(
   profileId: string,
   operation: () => Promise<T>

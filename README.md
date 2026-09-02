@@ -14,7 +14,7 @@ be expanded, explained, drafted into a comment, and posted back to Azure DevOps.
   [`@azure-devops/mcp`](https://github.com/microsoft/azure-devops-mcp) MCP server,
   spawned by the app and authenticated with a **Personal Access Token (PAT)**.
 - **SQLite** (better-sqlite3) stores PRs, reviews, findings, and comment drafts.
-- Secrets (PAT + GitHub token) are encrypted at rest with Electron `safeStorage`.
+- Secrets (per-repository PATs + GitHub token) are encrypted at rest with Electron `safeStorage`.
 
 ## Prerequisites
 
@@ -44,13 +44,13 @@ npm run typecheck     # check main, renderer, and test TypeScript
 1. Open **Settings**.
 2. Click **Sign in to GitHub Copilot** and enter the shown code at the URL.
 3. Pick a **model** (latest Claude / GPT).
-4. Add a named repository profile with its Azure DevOps **organization**, **project**, and
-   **repository**, then Save.
-5. Paste your Azure DevOps **PAT** and Save.
-6. Go to **Pull requests**, Refresh, open a PR, and click **Review this PR**.
+4. Add a named repository profile with its Azure DevOps **organization**, **project**,
+   **repository**, and **PAT**, then Save.
+5. Go to **Pull requests**, Refresh, open a PR, and click **Review this PR**.
 
 Add more repository profiles in **Settings**, then switch the active repository from the sidebar.
-Each profile keeps its pull requests and review history separate.
+Each profile keeps its PAT, pull requests, and review history separate. A project-scoped PAT can
+be entered for each repository profile in that project.
 
 ## Notes
 
