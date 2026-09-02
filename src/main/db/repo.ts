@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto'
+import { AsyncLocalStorage } from 'async_hooks'
 import { getDb } from './db'
 import type {
   ChatMessage,
@@ -7,6 +9,8 @@ import type {
   FindingStatus,
   PostedComment,
   PullRequest,
+  RepositoryProfile,
+  RepositoryProfileInput,
   Review,
   ReviewRunSettings,
   ReviewSkillSnapshot,
@@ -20,10 +24,19 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   adoOrg: '',
   adoProject: '',
   adoRepo: '',
+  activeRepositoryProfileId: '',
   model: ''
 }
 
+const repositoryProfileContext = new AsyncLocalStorage<RepositoryProfile>()
+
 export function getSetting(key: string): string {
+  const profile = repositoryProfileContext.getStore()
+  if (profile) {
+    if (key === 'adoOrg') return profile.adoOrg
+    if (key === 'adoProject') return profile.adoProject
+    if (key === 'adoRepo') return profile.adoRepo
+  }
   const db = getDb()
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     { value: string } | undefined
@@ -36,6 +49,225 @@ export function setSetting(key: string, value: string): void {
     `INSERT INTO settings(key, value) VALUES(?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
   ).run(key, value)
+}
+
+interface RepositoryProfileRow {
+  id: string
+  nickname: string
+  ado_org: string
+  ado_project: string
+  ado_repo: string
+}
+
+function mapRepositoryProfile(row: RepositoryProfileRow): RepositoryProfile {
+  return {
+    id: row.id,
+    nickname: row.nickname,
+    adoOrg: row.ado_org,
+    adoProject: row.ado_project,
+    adoRepo: row.ado_repo
+  }
+}
+
+function normalizeRepositoryProfile(input: RepositoryProfileInput): RepositoryProfileInput {
+  const normalized = {
+    nickname: input.nickname.trim(),
+    adoOrg: input.adoOrg.trim(),
+    adoProject: input.adoProject.trim(),
+    adoRepo: input.adoRepo.trim()
+  }
+  if (!normalized.nickname) throw new Error('Repository nickname is required.')
+  if (!normalized.adoOrg) throw new Error('Azure DevOps organization is required.')
+  if (!normalized.adoProject) throw new Error('Azure DevOps project is required.')
+  if (!normalized.adoRepo) throw new Error('Azure DevOps repository is required.')
+  return normalized
+}
+
+function profileFromDb(profileId: string, includeArchived = false): RepositoryProfile | null {
+  const archivedClause = includeArchived ? '' : 'AND archived_at IS NULL'
+  const row = getDb()
+    .prepare(
+      `SELECT id, nickname, ado_org, ado_project, ado_repo
+       FROM repository_profiles
+       WHERE id = ? ${archivedClause}`
+    )
+    .get(profileId) as RepositoryProfileRow | undefined
+  return row ? mapRepositoryProfile(row) : null
+}
+
+function projectActiveProfile(profile: RepositoryProfile | null): void {
+  const values: Array<[string, string]> = [
+    ['activeRepositoryProfileId', profile?.id ?? ''],
+    ['adoOrg', profile?.adoOrg ?? ''],
+    ['adoProject', profile?.adoProject ?? ''],
+    ['adoRepo', profile?.adoRepo ?? '']
+  ]
+  const statement = getDb().prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  )
+  for (const value of values) statement.run(...value)
+}
+
+export function listRepositoryProfiles(): RepositoryProfile[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, nickname, ado_org, ado_project, ado_repo
+       FROM repository_profiles
+       WHERE archived_at IS NULL
+       ORDER BY nickname COLLATE NOCASE, id`
+    )
+    .all() as RepositoryProfileRow[]
+  return rows.map(mapRepositoryProfile)
+}
+
+export function getActiveRepositoryProfile(): RepositoryProfile | null {
+  const profileId = getSetting('activeRepositoryProfileId')
+  return profileId ? profileFromDb(profileId) : null
+}
+
+export function withRepositoryProfile<T>(
+  profileId: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  const profile = profileFromDb(profileId, true)
+  if (!profile) throw new Error('Repository profile not found.')
+  return repositoryProfileContext.run(profile, operation)
+}
+
+export function withPullRequestProfile<T>(prId: number, operation: () => Promise<T>): Promise<T> {
+  const row = getDb().prepare('SELECT repo FROM pull_requests WHERE id = ?').get(prId) as
+    { repo: string } | undefined
+  return row ? withRepositoryProfile(row.repo, operation) : operation()
+}
+
+export function withFindingProfile<T>(findingId: number, operation: () => Promise<T>): Promise<T> {
+  const row = getDb()
+    .prepare(
+      `SELECT p.repo
+       FROM findings f
+       JOIN reviews r ON r.id = f.review_id
+       JOIN pull_requests p ON p.id = r.pr_id
+       WHERE f.id = ?`
+    )
+    .get(findingId) as { repo: string } | undefined
+  return row ? withRepositoryProfile(row.repo, operation) : operation()
+}
+
+export function saveRepositoryProfile(
+  profileId: string | null,
+  input: RepositoryProfileInput
+): RepositoryProfile {
+  const normalized = normalizeRepositoryProfile(input)
+  const db = getDb()
+
+  return db.transaction(() => {
+    const current = profileId ? profileFromDb(profileId) : null
+    if (profileId && !current) throw new Error('Repository profile not found.')
+
+    const sourceOwner = db
+      .prepare(
+        `SELECT id, archived_at
+         FROM repository_profiles
+         WHERE ado_org = ? AND ado_project = ? AND ado_repo = ?`
+      )
+      .get(normalized.adoOrg, normalized.adoProject, normalized.adoRepo) as
+      { id: string; archived_at: string | null } | undefined
+    if (sourceOwner && sourceOwner.id !== profileId && sourceOwner.archived_at === null) {
+      throw new Error('That Azure DevOps repository already has a profile.')
+    }
+
+    const targetId = current?.id ?? sourceOwner?.id ?? randomUUID()
+    const nicknameOwner = db
+      .prepare(
+        `SELECT id FROM repository_profiles
+         WHERE nickname = ? AND archived_at IS NULL AND id != ?`
+      )
+      .get(normalized.nickname, targetId) as { id: string } | undefined
+    if (nicknameOwner) {
+      throw new Error(`A repository profile named "${normalized.nickname}" already exists.`)
+    }
+
+    if (current) {
+      const sourceChanged =
+        current.adoOrg.toLocaleLowerCase() !== normalized.adoOrg.toLocaleLowerCase() ||
+        current.adoProject.toLocaleLowerCase() !== normalized.adoProject.toLocaleLowerCase() ||
+        current.adoRepo.toLocaleLowerCase() !== normalized.adoRepo.toLocaleLowerCase()
+      if (
+        sourceChanged &&
+        db.prepare('SELECT 1 FROM pull_requests WHERE repo = ? LIMIT 1').get(current.id)
+      ) {
+        throw new Error(
+          'Repository details cannot be changed after pull requests have been stored. Add a new profile instead.'
+        )
+      }
+      db.prepare(
+        `UPDATE repository_profiles
+         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?
+         WHERE id = ?`
+      ).run(
+        normalized.nickname,
+        normalized.adoOrg,
+        normalized.adoProject,
+        normalized.adoRepo,
+        current.id
+      )
+    } else if (sourceOwner) {
+      db.prepare(
+        `UPDATE repository_profiles
+         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, archived_at = NULL
+         WHERE id = ?`
+      ).run(
+        normalized.nickname,
+        normalized.adoOrg,
+        normalized.adoProject,
+        normalized.adoRepo,
+        sourceOwner.id
+      )
+    } else {
+      db.prepare(
+        `INSERT INTO repository_profiles (id, nickname, ado_org, ado_project, ado_repo)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run(
+        targetId,
+        normalized.nickname,
+        normalized.adoOrg,
+        normalized.adoProject,
+        normalized.adoRepo
+      )
+    }
+
+    const saved = profileFromDb(targetId)
+    if (!saved) throw new Error('Could not save repository profile.')
+    if (!getActiveRepositoryProfile() || getSetting('activeRepositoryProfileId') === saved.id) {
+      projectActiveProfile(saved)
+    }
+    return saved
+  })()
+}
+
+export function selectRepositoryProfile(profileId: string): RepositoryProfile {
+  const db = getDb()
+  return db.transaction(() => {
+    const profile = profileFromDb(profileId)
+    if (!profile) throw new Error('Repository profile not found.')
+    projectActiveProfile(profile)
+    return profile
+  })()
+}
+
+export function deleteRepositoryProfile(profileId: string): void {
+  const db = getDb()
+  db.transaction(() => {
+    const profile = profileFromDb(profileId)
+    if (!profile) throw new Error('Repository profile not found.')
+    db.prepare("UPDATE repository_profiles SET archived_at = datetime('now') WHERE id = ?").run(
+      profileId
+    )
+    if (getSetting('activeRepositoryProfileId') !== profileId) return
+    const fallback = listRepositoryProfiles()[0] ?? null
+    projectActiveProfile(fallback)
+  })()
 }
 
 // ---- pull requests ----
@@ -191,17 +423,23 @@ const PR_SELECT = `
        WHERE r.pr_id = p.id AND c.status = 'posted') AS comment_replies
   FROM pull_requests p`
 
-export function listPullRequests(): PullRequest[] {
+export function listPullRequests(
+  repositoryProfileId = getSetting('activeRepositoryProfileId')
+): PullRequest[] {
+  if (!repositoryProfileId) return []
   const db = getDb()
   const rows = db
-    .prepare(`${PR_SELECT} WHERE p.active = 1 ORDER BY p.updated_at DESC`)
-    .all() as PrRow[]
+    .prepare(`${PR_SELECT} WHERE p.active = 1 AND p.repo = ? ORDER BY p.updated_at DESC`)
+    .all(repositoryProfileId) as PrRow[]
   return rows.map(mapPr)
 }
 
 /** Mark all PRs inactive; the next sync re-activates those still present. */
-export function markAllPullRequestsInactive(): void {
-  getDb().prepare('UPDATE pull_requests SET active = 0').run()
+export function markAllPullRequestsInactive(
+  repositoryProfileId = getSetting('activeRepositoryProfileId')
+): void {
+  if (!repositoryProfileId) return
+  getDb().prepare('UPDATE pull_requests SET active = 0 WHERE repo = ?').run(repositoryProfileId)
 }
 
 export function getPullRequest(id: number): PullRequest | null {
@@ -915,11 +1153,19 @@ export function updateCommentThreadState(
 }
 
 /** PR ids that have at least one posted comment thread. */
-export function getPrIdsWithPostedComments(): number[] {
+export function getPrIdsWithPostedComments(
+  repositoryProfileId = getSetting('activeRepositoryProfileId')
+): number[] {
+  if (!repositoryProfileId) return []
   const db = getDb()
-  const rows = db.prepare('SELECT DISTINCT pr_id AS prId FROM posted_comments').all() as Array<{
-    prId: number
-  }>
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT pc.pr_id AS prId
+       FROM posted_comments pc
+       JOIN pull_requests p ON p.id = pc.pr_id
+       WHERE p.repo = ?`
+    )
+    .all(repositoryProfileId) as Array<{ prId: number }>
   return rows.map((r) => r.prId)
 }
 

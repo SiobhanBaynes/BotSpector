@@ -1,7 +1,7 @@
 # BotSpector 🕵️
 
 Your slightly nosy PR sidekick. A desktop app (Electron + React + TypeScript) that
-snoops through pull requests from an Azure DevOps repository and reviews each one
+snoops through pull requests from your Azure DevOps repositories and reviews each one
 with a GitHub Copilot–powered agent. Findings are grouped into
 **Blocking / High / Medium / Low / Nit**, each with its own ID and status, and can
 be expanded, explained, drafted into a comment, and posted back to Azure DevOps.
@@ -44,9 +44,13 @@ npm run typecheck     # check main, renderer, and test TypeScript
 1. Open **Settings**.
 2. Click **Sign in to GitHub Copilot** and enter the shown code at the URL.
 3. Pick a **model** (latest Claude / GPT).
-4. Enter your Azure DevOps **organization**, **project**, and **repository**, then Save.
+4. Add a named repository profile with its Azure DevOps **organization**, **project**, and
+   **repository**, then Save.
 5. Paste your Azure DevOps **PAT** and Save.
 6. Go to **Pull requests**, Refresh, open a PR, and click **Review this PR**.
+
+Add more repository profiles in **Settings**, then switch the active repository from the sidebar.
+Each profile keeps its pull requests and review history separate.
 
 ## Notes
 

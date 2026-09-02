@@ -11,6 +11,8 @@ export function App(): JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [tab, setTab] = useState<Tab>('prs')
   const [selectedPrId, setSelectedPrId] = useState<number | null>(null)
+  const [switchingRepository, setSwitchingRepository] = useState(false)
+  const [repositoryError, setRepositoryError] = useState<string | null>(null)
   const { theme, setTheme } = useTheme()
 
   const refreshSettings = useCallback(async () => {
@@ -22,8 +24,25 @@ export function App(): JSX.Element {
     void refreshSettings()
   }, [refreshSettings])
 
+  const selectRepository = async (profileId: string): Promise<void> => {
+    if (!profileId || profileId === settings?.activeRepositoryProfileId) return
+    setSwitchingRepository(true)
+    setRepositoryError(null)
+    const res = await window.api.selectRepositoryProfile(profileId)
+    setSwitchingRepository(false)
+    if (res.ok) {
+      setSettings(res.data)
+      setSelectedPrId(null)
+    } else {
+      setRepositoryError(res.error)
+    }
+  }
+
   const configured =
-    !!settings && settings.copilotConnected && settings.hasAdoPat && !!settings.adoRepo
+    !!settings &&
+    settings.copilotConnected &&
+    settings.hasAdoPat &&
+    !!settings.activeRepositoryProfileId
 
   return (
     <div className="app">
@@ -31,6 +50,23 @@ export function App(): JSX.Element {
         <div className="brand">
           🕵️ BotSpector
           <div className="tagline">your slightly nosy PR sidekick</div>
+        </div>
+        <div className="repository-switcher">
+          <label htmlFor="active-repository">Repository</label>
+          <select
+            id="active-repository"
+            value={settings?.activeRepositoryProfileId ?? ''}
+            disabled={switchingRepository || !settings?.repositoryProfiles.length}
+            onChange={(event) => void selectRepository(event.target.value)}
+          >
+            {!settings?.repositoryProfiles.length && <option value="">No repositories</option>}
+            {settings?.repositoryProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.nickname}
+              </option>
+            ))}
+          </select>
+          {repositoryError && <span className="repository-switcher-error">{repositoryError}</span>}
         </div>
         <nav>
           <button
@@ -69,8 +105,8 @@ export function App(): JSX.Element {
           <div className="empty">
             <h2>Let’s get BotSpector snooping 🔍</h2>
             <p>
-              First, sign in to GitHub Copilot, add your Azure DevOps PAT and repository, and pick a
-              model in{' '}
+              First, sign in to GitHub Copilot, add your Azure DevOps PAT and a repository profile,
+              and pick a model in{' '}
               <button className="link" onClick={() => setTab('settings')}>
                 Settings
               </button>
@@ -79,7 +115,11 @@ export function App(): JSX.Element {
           </div>
         )}
         {tab === 'prs' && configured && selectedPrId === null && (
-          <PrList myIdentity={settings?.myIdentity ?? ''} onOpen={setSelectedPrId} />
+          <PrList
+            key={settings.activeRepositoryProfileId}
+            myIdentity={settings.myIdentity}
+            onOpen={setSelectedPrId}
+          />
         )}
         {tab === 'prs' && configured && selectedPrId !== null && (
           <ReviewDetail
