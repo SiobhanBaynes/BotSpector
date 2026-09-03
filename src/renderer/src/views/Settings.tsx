@@ -7,6 +7,7 @@ import type {
   Skill
 } from '../../../shared/types'
 import type { ThemePref } from '../theme'
+import { BUILD_INFO, formatBuildTimestamp } from '../buildInfo'
 
 interface Props {
   settings: Settings | null
@@ -639,7 +640,25 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
       <section className="card">
         <h2>Diagnostics</h2>
-        <p className="muted">Open the log file to see review activity and errors.</p>
+        <p className="muted">Build details identify the exact app bundle when reporting issues.</p>
+        <dl className="build-details" aria-label="Build information">
+          <dt>Version</dt>
+          <dd>v{BUILD_INFO.version}</dd>
+          <dt>Build</dt>
+          <dd>
+            {BUILD_INFO.buildNumber}
+            {BUILD_INFO.buildId ? ` (#${BUILD_INFO.buildId})` : ''}
+          </dd>
+          <dt>Commit</dt>
+          <dd>
+            <code>{BUILD_INFO.commit}</code>
+            {BUILD_INFO.dirty ? ' (dirty working tree)' : ''}
+          </dd>
+          <dt>Built</dt>
+          <dd>
+            <time dateTime={BUILD_INFO.builtAt}>{formatBuildTimestamp(BUILD_INFO.builtAt)}</time>
+          </dd>
+        </dl>
         <button className="btn" onClick={() => window.api.openLogs()}>
           Open logs
         </button>

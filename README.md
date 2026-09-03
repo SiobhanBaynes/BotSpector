@@ -39,6 +39,13 @@ npm run test:watch    # rerun affected tests while editing
 npm run typecheck     # check main, renderer, and test TypeScript
 ```
 
+## Build identity
+
+Every app bundle embeds the version from `package.json`, its source commit, and its UTC build time.
+Azure Pipelines builds also include the pipeline build number and ID. Local builds use a timestamped
+`local-*` build number and show `*` beside the commit when the working tree was dirty. The compact
+version is always visible in the sidebar, with complete details under **Settings → Diagnostics**.
+
 ## First-time setup (in the app)
 
 1. Open **Settings**.

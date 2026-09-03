@@ -1,7 +1,18 @@
 import { _electron as electron, expect, test } from '@playwright/test'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+
+const packageVersion = (
+  JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string }
+).version
+const escapedPackageVersion = packageVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const expectedBuildNumber = process.env.BOTSPECTOR_BUILD_NUMBER || process.env.BUILD_BUILDNUMBER
+const expectedBuildId = process.env.BUILD_BUILDID
+const expectedCommit =
+  process.env.BOTSPECTOR_SOURCE_COMMIT ||
+  process.env.SYSTEM_PULLREQUEST_SOURCECOMMITID ||
+  process.env.BUILD_SOURCEVERSION
 
 test('launches the BotSpector desktop shell', async () => {
   const userDataDir = mkdtempSync(join(tmpdir(), 'botspector-smoke-'))
@@ -21,11 +32,29 @@ test('launches the BotSpector desktop shell', async () => {
     await expect(window).toHaveTitle('BotSpector')
     await expect(window.locator('#root .app')).toBeVisible()
     await expect(window.locator('.brand')).toContainText('BotSpector')
+    await expect(window.locator('.build-version')).toHaveText(
+      new RegExp(`^v${escapedPackageVersion} · (#[0-9]+|[0-9a-fA-F]{8}\\*?|unknown)$`)
+    )
+    await expect(window.locator('.build-version')).toHaveAttribute(
+      'title',
+      /Commit ([0-9a-fA-F]{40}|unknown)/
+    )
+    if (expectedBuildId) {
+      await expect(window.locator('.build-version')).toHaveText(
+        `v${packageVersion} · #${expectedBuildId}`
+      )
+    }
     await expect(
       window.getByRole('navigation').getByRole('button', { name: 'Settings' })
     ).toBeVisible()
 
     await window.getByRole('navigation').getByRole('button', { name: 'Settings' }).click()
+    const buildDetails = window.getByLabel('Build information')
+    await expect(buildDetails).toContainText(`Versionv${packageVersion}`)
+    await expect(buildDetails).toContainText(/Build.+Commit([0-9a-fA-F]{40}|unknown)Built/)
+    if (expectedBuildNumber) await expect(buildDetails).toContainText(expectedBuildNumber)
+    if (expectedBuildId) await expect(buildDetails).toContainText(`#${expectedBuildId}`)
+    if (expectedCommit) await expect(buildDetails).toContainText(expectedCommit)
     await expect(window.locator('.repository-profile-editor')).toHaveCount(0)
     await window.getByRole('button', { name: 'Add repository' }).click()
     let editor = window.locator('.repository-profile-editor')
