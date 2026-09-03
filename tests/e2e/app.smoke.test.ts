@@ -50,11 +50,17 @@ test('launches the BotSpector desktop shell', async () => {
 
     await window.getByRole('navigation').getByRole('button', { name: 'Settings' }).click()
     const buildDetails = window.getByLabel('Build information')
-    await expect(buildDetails).toContainText(`Versionv${packageVersion}`)
-    await expect(buildDetails).toContainText(/Build.+Commit([0-9a-fA-F]{40}|unknown)Built/)
-    if (expectedBuildNumber) await expect(buildDetails).toContainText(expectedBuildNumber)
-    if (expectedBuildId) await expect(buildDetails).toContainText(`#${expectedBuildId}`)
-    if (expectedCommit) await expect(buildDetails).toContainText(expectedCommit)
+    const buildValues = buildDetails.locator('dd')
+    await expect(buildValues).toHaveCount(4)
+    await expect(buildValues.nth(0)).toHaveText(`v${packageVersion}`)
+    await expect(buildValues.nth(1)).toHaveText(/.+/)
+    await expect(buildValues.nth(2)).toHaveText(
+      /^([0-9a-fA-F]{40}|unknown)( \(dirty working tree\))?$/
+    )
+    await expect(buildValues.nth(3)).toHaveText(/.+/)
+    if (expectedBuildNumber) await expect(buildValues.nth(1)).toContainText(expectedBuildNumber)
+    if (expectedBuildId) await expect(buildValues.nth(1)).toContainText(`#${expectedBuildId}`)
+    if (expectedCommit) await expect(buildValues.nth(2)).toContainText(expectedCommit)
     await expect(window.locator('.repository-profile-editor')).toHaveCount(0)
     await window.getByRole('button', { name: 'Add repository' }).click()
     let editor = window.locator('.repository-profile-editor')

@@ -39,13 +39,24 @@ function readGitDirty(): boolean {
   }
 }
 
+function readBuildTimestamp(): string {
+  const configured = process.env.BOTSPECTOR_BUILD_TIMESTAMP
+  if (!configured) return new Date().toISOString()
+
+  const timestamp = new Date(configured)
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new Error('BOTSPECTOR_BUILD_TIMESTAMP must be a valid date and time')
+  }
+  return timestamp.toISOString()
+}
+
 function readBuildInfo(): EmbeddedBuildInfo {
   const packageJson = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
     version?: string
   }
   if (!packageJson.version) throw new Error('package.json does not define a version')
 
-  const builtAt = process.env.BOTSPECTOR_BUILD_TIMESTAMP || new Date().toISOString()
+  const builtAt = readBuildTimestamp()
   const localTimestamp = builtAt.replace(/\D/g, '').slice(0, 14)
   return {
     version: packageJson.version,
