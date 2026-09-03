@@ -27,8 +27,10 @@ function readGitCommit(): string {
 
 function readGitDirty(): boolean {
   try {
+    // Config loading may create a transient untracked bundle before this runs.
+    // Tracked changes still identify packages that differ from their commit.
     return (
-      execFileSync('git', ['status', '--porcelain'], {
+      execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
         cwd: __dirname,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore']
