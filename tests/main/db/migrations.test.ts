@@ -59,7 +59,7 @@ describe('runMigrations', () => {
   it('migrates a fresh database to the latest version', () => {
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(15)
+    expect(database.pragma('user_version', { simple: true })).toBe(16)
   })
 
   it('creates every application table', () => {
@@ -69,6 +69,7 @@ describe('runMigrations', () => {
       'chat_messages',
       'comments',
       'findings',
+      'opencode_handoffs',
       'posted_comments',
       'pull_requests',
       'repository_profiles',
@@ -132,7 +133,24 @@ describe('runMigrations', () => {
         'ado_repo',
         'created_at',
         'archived_at',
-        'my_identity'
+        'my_identity',
+        'local_checkout_path'
+      ]
+    ],
+    [
+      'opencode_handoffs',
+      [
+        'id',
+        'pr_id',
+        'session_id',
+        'worktree_path',
+        'branch_name',
+        'base_commit',
+        'seed_message_id',
+        'last_synced_message_id',
+        'changed_files_json',
+        'created_at',
+        'last_synced_at'
       ]
     ],
     [
@@ -183,7 +201,7 @@ describe('runMigrations', () => {
         'updated_at'
       ]
     ],
-    ['chat_messages', ['id', 'pr_id', 'role', 'content', 'created_at']]
+    ['chat_messages', ['id', 'pr_id', 'role', 'content', 'created_at', 'source']]
   ])('creates the expected columns for %s', (table, expectedColumns) => {
     runMigrations(database)
 
@@ -196,6 +214,7 @@ describe('runMigrations', () => {
     expect(indexNames()).toEqual([
       'idx_chat_messages_pr',
       'idx_findings_review',
+      'idx_opencode_handoffs_pr',
       'idx_posted_comments_pr',
       'idx_repository_profiles_nickname_active',
       'idx_review_runs_pr',
@@ -209,7 +228,8 @@ describe('runMigrations', () => {
     ['findings', 'review_id', 'reviews', 'id'],
     ['comments', 'finding_id', 'findings', 'id'],
     ['posted_comments', 'pr_id', 'pull_requests', 'id'],
-    ['chat_messages', 'pr_id', 'pull_requests', 'id']
+    ['chat_messages', 'pr_id', 'pull_requests', 'id'],
+    ['opencode_handoffs', 'pr_id', 'pull_requests', 'id']
   ])(
     'declares the %s.%s foreign key to %s.%s with cascade deletion',
     (table, from, targetTable, to) => {
@@ -236,7 +256,7 @@ describe('runMigrations', () => {
     expect(database.prepare('SELECT value FROM settings WHERE key = ?').pluck().get('theme')).toBe(
       'dark'
     )
-    expect(database.pragma('user_version', { simple: true })).toBe(15)
+    expect(database.pragma('user_version', { simple: true })).toBe(16)
   })
 
   it('does not downgrade a database with a newer schema version', () => {
@@ -305,7 +325,7 @@ describe('runMigrations', () => {
 
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(15)
+    expect(database.pragma('user_version', { simple: true })).toBe(16)
     expect(database.prepare('SELECT * FROM posted_comments').get()).toMatchObject({
       pr_id: 1,
       ado_thread_id: 400,
@@ -388,7 +408,7 @@ describe('runMigrations', () => {
       profile.id
     )
     expect(database.prepare('SELECT pr_id FROM reviews WHERE id = 10').pluck().get()).toBe(1)
-    expect(database.pragma('user_version', { simple: true })).toBe(15)
+    expect(database.pragma('user_version', { simple: true })).toBe(16)
   })
 
   it('copies the legacy identity to every repository profile when upgrading version 14', () => {
@@ -422,7 +442,7 @@ describe('runMigrations', () => {
       { id: 'api', my_identity: 'Siobhan Legacy' },
       { id: 'web', my_identity: 'Siobhan Legacy' }
     ])
-    expect(database.pragma('user_version', { simple: true })).toBe(15)
+    expect(database.pragma('user_version', { simple: true })).toBe(16)
   })
 
   it('backfills cached PRs when the configured repository is an ID instead of its name', () => {

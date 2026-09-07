@@ -631,7 +631,14 @@ export async function chatAboutPullRequest(
         `Current review findings:\n${findingsSummary || '(no review has been run yet)'}` +
         `${buildPriorCommentsBlock(priorComments)}`
     },
-    ...history.map((m) => ({ role: m.role, content: m.content }) as AgentMessage)
+    ...history.map(
+      (m) =>
+        ({
+          role: m.role,
+          content:
+            m.source === 'opencode' ? `[From the linked OpenCode session]\n${m.content}` : m.content
+        }) as AgentMessage
+    )
   ]
 
   let finalContent: string | null = null

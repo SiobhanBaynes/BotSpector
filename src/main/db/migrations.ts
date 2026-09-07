@@ -295,6 +295,36 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
         ''
       )
     `)
+  },
+  // v16 -> optionally link repository profiles to a local checkout and retain
+  // the OpenCode session associated with a PR handoff.
+  (db) => {
+    db.exec(
+      `ALTER TABLE repository_profiles ADD COLUMN local_checkout_path TEXT NOT NULL DEFAULT ''`
+    )
+    const hasChatMessages = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_messages'")
+      .get()
+    if (hasChatMessages) {
+      db.exec(`ALTER TABLE chat_messages ADD COLUMN source TEXT NOT NULL DEFAULT 'botspector'`)
+    }
+    db.exec(`
+      CREATE TABLE opencode_handoffs (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id                  INTEGER NOT NULL UNIQUE REFERENCES pull_requests(id) ON DELETE CASCADE,
+        session_id             TEXT NOT NULL UNIQUE,
+        worktree_path          TEXT NOT NULL,
+        branch_name            TEXT NOT NULL,
+        base_commit            TEXT NOT NULL,
+        seed_message_id        TEXT,
+        last_synced_message_id TEXT,
+        changed_files_json     TEXT NOT NULL DEFAULT '[]',
+        created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+        last_synced_at         TEXT
+      );
+
+      CREATE INDEX idx_opencode_handoffs_pr ON opencode_handoffs(pr_id);
+    `)
   }
 ]
 

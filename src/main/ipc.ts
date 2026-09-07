@@ -1,6 +1,7 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { diffLines } from 'diff'
+import { join } from 'path'
 import { IPC } from '../shared/ipc'
 import type {
   AdoCommentThread,
@@ -13,6 +14,9 @@ import type {
   Finding,
   FindingStatus,
   IpcResult,
+  OpenCodeHandoff,
+  OpenCodeStatus,
+  OpenCodeSyncResult,
   PostedComment,
   PrAdoDetails,
   PullRequest,
@@ -51,6 +55,7 @@ import {
   fetchFileContent,
   fetchImageAsDataUrl,
   fetchPullRequestComments,
+  getPullRequestContext,
   replyToPullRequestThread,
   postPullRequestComment
 } from './mcp/adoService'
@@ -75,6 +80,18 @@ import {
   userSkillsDir
 } from './agent/skillStore'
 import { openLogs, logger } from './logger'
+import {
+  buildOpenCodeSeed,
+  clearOpenCodeConfiguration,
+  configureOpenCode,
+  createOpenCodeSession,
+  detectOpenCode,
+  getOpenCodeStatus,
+  launchOpenCodeTui,
+  messagesAfterOpenCodeAnchor,
+  readOpenCodeSession,
+  validateRepositoryCheckout
+} from './opencode'
 
 function ok<T>(data: T): IpcResult<T> {
   return { ok: true, data }
@@ -111,6 +128,30 @@ function resolveModel(override?: string): string {
 
 function resolveReviewDepth(value?: string): ReviewDepth {
   return value === 'intensive' ? 'intensive' : 'quick'
+}
+
+function findingsSummaryForPr(prId: number): string {
+  const review = repo.getReviewForPr(prId)
+  return (review?.findings ?? [])
+    .map((finding) => {
+      const location = finding.filePath
+        ? ` (${finding.filePath}${finding.line ? `:${finding.line}` : ''})`
+        : ''
+      return `- [${finding.publicId} · ${finding.bucket} · ${finding.status}] ${finding.title}${location}\n  ${finding.description}`
+    })
+    .join('\n')
+}
+
+function publicOpenCodeHandoff(handoff: repo.StoredOpenCodeHandoff): OpenCodeHandoff {
+  return {
+    sessionId: handoff.sessionId,
+    worktreePath: handoff.worktreePath,
+    branchName: handoff.branchName,
+    baseCommit: handoff.baseCommit,
+    changedFiles: handoff.changedFiles,
+    createdAt: handoff.createdAt,
+    lastSyncedAt: handoff.lastSyncedAt
+  }
 }
 
 // Add ourselves as an optional reviewer on a PR — best-effort and non-blocking.
@@ -225,12 +266,35 @@ export function registerIpcHandlers(): void {
       try {
         const pat = typeof input.pat === 'string' ? input.pat.trim() : ''
         if (pat) secrets.assertSecureStorageAvailable()
-        const saved = repo.saveRepositoryProfile(profileId, input)
+        const localCheckoutPath = input.localCheckoutPath?.trim()
+        const normalizedCheckout = localCheckoutPath
+          ? await validateRepositoryCheckout(localCheckoutPath, input.adoRepo.trim())
+          : ''
+        const saved = repo.saveRepositoryProfile(profileId, {
+          ...input,
+          localCheckoutPath: normalizedCheckout
+        })
         if (pat) {
           secrets.setAdoPat(saved.id, pat)
           await disconnectAdoClients()
         }
         return ok(readSettings())
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.repositoryChooseCheckout,
+    async (_e, expectedRepository: string): Promise<IpcResult<string | null>> => {
+      try {
+        const result = await dialog.showOpenDialog({
+          title: 'Choose local repository checkout',
+          properties: ['openDirectory']
+        })
+        if (result.canceled || !result.filePaths[0]) return ok(null)
+        return ok(await validateRepositoryCheckout(result.filePaths[0], expectedRepository.trim()))
       } catch (e) {
         return fail(e)
       }
@@ -265,6 +329,43 @@ export function registerIpcHandlers(): void {
       const name = await repo.withRepositoryProfile(profileId, fetchCurrentUserDisplayName)
       if (!name) throw new Error('Could not determine your Azure DevOps display name')
       return ok(name)
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  ipcMain.handle(IPC.openCodeStatus, async (): Promise<IpcResult<OpenCodeStatus>> => {
+    try {
+      return ok(await getOpenCodeStatus())
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  ipcMain.handle(IPC.openCodeDetect, async (): Promise<IpcResult<OpenCodeStatus>> => {
+    try {
+      return ok(await detectOpenCode())
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  ipcMain.handle(IPC.openCodeChoose, async (): Promise<IpcResult<OpenCodeStatus>> => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: 'Choose OpenCode executable',
+        properties: ['openFile']
+      })
+      if (result.canceled || !result.filePaths[0]) return ok(await getOpenCodeStatus())
+      return ok(await configureOpenCode(result.filePaths[0]))
+    } catch (e) {
+      return fail(e)
+    }
+  })
+
+  ipcMain.handle(IPC.openCodeClear, (): IpcResult<OpenCodeStatus> => {
+    try {
+      return ok(clearOpenCodeConfiguration())
     } catch (e) {
       return fail(e)
     }
@@ -1247,13 +1348,7 @@ export function registerIpcHandlers(): void {
         const text = message.trim()
         if (!text) throw new Error('Message is empty')
         const model = resolveModel(modelArg)
-        const review = repo.getReviewForPr(prId)
-        const findingsSummary = (review?.findings ?? [])
-          .map((f) => {
-            const loc = f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ''})` : ''
-            return `- [${f.publicId} · ${f.bucket} · ${f.status}] ${f.title}${loc}\n  ${f.description}`
-          })
-          .join('\n')
+        const findingsSummary = findingsSummaryForPr(prId)
         const priorComments = repo.listPostedComments(prId)
         const history: ChatMessage[] = [
           ...repo.listChatMessages(prId),
@@ -1361,6 +1456,121 @@ export function registerIpcHandlers(): void {
       return fail(e)
     }
   })
+
+  handlePullRequest(
+    IPC.prOpenCodeHandoff,
+    (_e, prId: number): IpcResult<OpenCodeHandoff | null> => {
+      try {
+        const handoff = repo.getOpenCodeHandoff(prId)
+        return ok(handoff ? publicOpenCodeHandoff(handoff) : null)
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handlePullRequest(
+    IPC.prOpenCodeStart,
+    async (_e, prId: number): Promise<IpcResult<OpenCodeHandoff>> => {
+      try {
+        const status = await getOpenCodeStatus()
+        if (!status.available || !status.executablePath) {
+          throw new Error(status.error ?? 'Configure OpenCode in Settings first.')
+        }
+        const existing = repo.getOpenCodeHandoff(prId)
+        if (existing) {
+          await launchOpenCodeTui(status.executablePath, existing.worktreePath, existing.sessionId)
+          return ok(publicOpenCodeHandoff(existing))
+        }
+
+        const pullRequest = repo.getPullRequest(prId)
+        if (!pullRequest) throw new Error('Pull request not found')
+        const profile = repo.getCurrentRepositoryProfile()
+        if (!profile?.localCheckoutPath) {
+          throw new Error('Choose a local checkout for this repository in Settings first.')
+        }
+        const checkoutPath = await validateRepositoryCheckout(
+          profile.localCheckoutPath,
+          profile.adoRepo
+        )
+        const context = await getPullRequestContext(pullRequest.adoPrId)
+        const seed = buildOpenCodeSeed({
+          pullRequest,
+          pullRequestContext: context.summary,
+          findingsSummary: findingsSummaryForPr(prId),
+          priorComments: repo.listPostedComments(prId),
+          history: repo.listChatMessages(prId)
+        })
+        const created = await createOpenCodeSession({
+          executablePath: status.executablePath,
+          checkoutPath,
+          worktreesRoot: join(app.getPath('userData'), 'opencode-worktrees'),
+          pullRequest,
+          seed
+        })
+        const handoff = repo.createOpenCodeHandoff(prId, created)
+        await launchOpenCodeTui(status.executablePath, handoff.worktreePath, handoff.sessionId)
+        return ok(publicOpenCodeHandoff(handoff))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handlePullRequest(
+    IPC.prOpenCodeReopen,
+    async (_e, prId: number): Promise<IpcResult<OpenCodeHandoff>> => {
+      try {
+        const status = await getOpenCodeStatus()
+        if (!status.available || !status.executablePath) {
+          throw new Error(status.error ?? 'Configure OpenCode in Settings first.')
+        }
+        const handoff = repo.getOpenCodeHandoff(prId)
+        if (!handoff) throw new Error('No OpenCode handoff exists for this PR.')
+        await launchOpenCodeTui(status.executablePath, handoff.worktreePath, handoff.sessionId)
+        return ok(publicOpenCodeHandoff(handoff))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handlePullRequest(
+    IPC.prOpenCodeSync,
+    async (_e, prId: number): Promise<IpcResult<OpenCodeSyncResult>> => {
+      try {
+        const status = await getOpenCodeStatus()
+        if (!status.available || !status.executablePath) {
+          throw new Error(status.error ?? 'Configure OpenCode in Settings first.')
+        }
+        const handoff = repo.getOpenCodeHandoff(prId)
+        if (!handoff) throw new Error('No OpenCode handoff exists for this PR.')
+        const snapshot = await readOpenCodeSession(
+          status.executablePath,
+          handoff.worktreePath,
+          handoff.sessionId
+        )
+        const imported = messagesAfterOpenCodeAnchor(
+          snapshot.messages,
+          handoff.seedMessageId,
+          handoff.lastSyncedMessageId
+        )
+        const synced = repo.applyOpenCodeSync(
+          prId,
+          imported.messages,
+          imported.lastMessageId,
+          snapshot.changedFiles
+        )
+        return ok({
+          handoff: publicOpenCodeHandoff(synced),
+          importedMessages: imported.messages.length,
+          inProgress: imported.inProgress
+        })
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
 
   handleFinding(
     IPC.findingGetCode,

@@ -7,7 +7,12 @@ export const IPC = {
   repositoryProfileSave: 'settings:repositoryProfileSave',
   repositoryProfileSelect: 'settings:repositoryProfileSelect',
   repositoryProfileDelete: 'settings:repositoryProfileDelete',
+  repositoryChooseCheckout: 'settings:repositoryChooseCheckout',
   detectIdentity: 'settings:detectIdentity',
+  openCodeStatus: 'settings:openCodeStatus',
+  openCodeDetect: 'settings:openCodeDetect',
+  openCodeChoose: 'settings:openCodeChoose',
+  openCodeClear: 'settings:openCodeClear',
 
   // Copilot auth
   copilotStartLogin: 'copilot:startLogin',
@@ -74,6 +79,10 @@ export const IPC = {
   prChat: 'pr:chat',
   prChatHistory: 'pr:chatHistory',
   prChatClear: 'pr:chatClear',
+  prOpenCodeHandoff: 'pr:openCodeHandoff',
+  prOpenCodeStart: 'pr:openCodeStart',
+  prOpenCodeReopen: 'pr:openCodeReopen',
+  prOpenCodeSync: 'pr:openCodeSync',
 
   // Diagnostics
   logsOpen: 'logs:open'

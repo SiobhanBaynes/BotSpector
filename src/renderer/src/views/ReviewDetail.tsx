@@ -23,6 +23,7 @@ import { AdoCommentsTab } from './AdoCommentsTab'
 interface Props {
   prId: number
   defaultModel: string
+  localCheckoutConfigured: boolean
   onBack: () => void
 }
 
@@ -35,7 +36,12 @@ const REVIEW_DEPTH_KEY = 'botspector.reviewDepth'
 type StatusFilter = 'all' | FindingStatus
 type Tab = 'review' | 'files' | 'comments' | 'chat'
 
-export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element {
+export function ReviewDetail({
+  prId,
+  defaultModel,
+  localCheckoutConfigured,
+  onBack
+}: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
   const [review, setReview] = useState<Review | null>(null)
   const [reviewHistory, setReviewHistory] = useState<ReviewSummary[]>([])
@@ -613,6 +619,7 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         <ChatTab
           prId={prId}
           model={defaultModel}
+          localCheckoutConfigured={localCheckoutConfigured}
           pinnedChange={pinnedChange}
           onClearPinnedChange={() => setPinnedChange(null)}
           onFindingCreated={load}

@@ -7,6 +7,8 @@ import type {
   Finding,
   FindingBucket,
   FindingStatus,
+  OpenCodeChangedFile,
+  OpenCodeHandoff,
   PostedComment,
   PullRequest,
   RepositoryProfile,
@@ -25,7 +27,8 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   adoProject: '',
   adoRepo: '',
   activeRepositoryProfileId: '',
-  model: ''
+  model: '',
+  openCodeExecutablePath: ''
 }
 
 const repositoryProfileContext = new AsyncLocalStorage<RepositoryProfile>()
@@ -59,6 +62,7 @@ interface RepositoryProfileRow {
   ado_project: string
   ado_repo: string
   my_identity: string
+  local_checkout_path: string
 }
 
 function mapRepositoryProfile(row: RepositoryProfileRow): RepositoryProfile {
@@ -68,7 +72,8 @@ function mapRepositoryProfile(row: RepositoryProfileRow): RepositoryProfile {
     adoOrg: row.ado_org,
     adoProject: row.ado_project,
     adoRepo: row.ado_repo,
-    myIdentity: row.my_identity
+    myIdentity: row.my_identity,
+    localCheckoutPath: row.local_checkout_path
   }
 }
 
@@ -78,7 +83,8 @@ function normalizeRepositoryProfile(input: RepositoryProfileInput): RepositoryPr
     adoOrg: input.adoOrg.trim(),
     adoProject: input.adoProject.trim(),
     adoRepo: input.adoRepo.trim(),
-    myIdentity: input.myIdentity.trim()
+    myIdentity: input.myIdentity.trim(),
+    localCheckoutPath: input.localCheckoutPath?.trim() ?? ''
   }
   if (!normalized.nickname) throw new Error('Repository nickname is required.')
   if (!normalized.adoOrg) throw new Error('Azure DevOps organization is required.')
@@ -91,7 +97,7 @@ function profileFromDb(profileId: string, includeArchived = false): RepositoryPr
   const archivedClause = includeArchived ? '' : 'AND archived_at IS NULL'
   const row = getDb()
     .prepare(
-      `SELECT id, nickname, ado_org, ado_project, ado_repo, my_identity
+      `SELECT id, nickname, ado_org, ado_project, ado_repo, my_identity, local_checkout_path
        FROM repository_profiles
        WHERE id = ? ${archivedClause}`
     )
@@ -117,7 +123,7 @@ function projectActiveProfile(profile: RepositoryProfile | null): void {
 export function listRepositoryProfiles(): RepositoryProfile[] {
   const rows = getDb()
     .prepare(
-      `SELECT id, nickname, ado_org, ado_project, ado_repo, my_identity
+      `SELECT id, nickname, ado_org, ado_project, ado_repo, my_identity, local_checkout_path
        FROM repository_profiles
        WHERE archived_at IS NULL
        ORDER BY nickname COLLATE NOCASE, id`
@@ -131,8 +137,12 @@ export function getActiveRepositoryProfile(): RepositoryProfile | null {
   return profileId ? profileFromDb(profileId) : null
 }
 
+export function getCurrentRepositoryProfile(): RepositoryProfile | null {
+  return repositoryProfileContext.getStore() ?? getActiveRepositoryProfile()
+}
+
 export function getCurrentRepositoryProfileId(): string | null {
-  return repositoryProfileContext.getStore()?.id ?? getActiveRepositoryProfile()?.id ?? null
+  return getCurrentRepositoryProfile()?.id ?? null
 }
 
 export function withRepositoryProfile<T>(
@@ -212,7 +222,8 @@ export function saveRepositoryProfile(
       }
       db.prepare(
         `UPDATE repository_profiles
-         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, my_identity = ?
+         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, my_identity = ?,
+             local_checkout_path = ?
          WHERE id = ?`
       ).run(
         normalized.nickname,
@@ -220,12 +231,14 @@ export function saveRepositoryProfile(
         normalized.adoProject,
         normalized.adoRepo,
         normalized.myIdentity,
+        normalized.localCheckoutPath,
         current.id
       )
     } else if (sourceOwner) {
       db.prepare(
         `UPDATE repository_profiles
-         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, my_identity = ?, archived_at = NULL
+         SET nickname = ?, ado_org = ?, ado_project = ?, ado_repo = ?, my_identity = ?,
+             local_checkout_path = ?, archived_at = NULL
          WHERE id = ?`
       ).run(
         normalized.nickname,
@@ -233,20 +246,22 @@ export function saveRepositoryProfile(
         normalized.adoProject,
         normalized.adoRepo,
         normalized.myIdentity,
+        normalized.localCheckoutPath,
         sourceOwner.id
       )
     } else {
       db.prepare(
         `INSERT INTO repository_profiles
-           (id, nickname, ado_org, ado_project, ado_repo, my_identity)
-         VALUES (?, ?, ?, ?, ?, ?)`
+           (id, nickname, ado_org, ado_project, ado_repo, my_identity, local_checkout_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       ).run(
         targetId,
         normalized.nickname,
         normalized.adoOrg,
         normalized.adoProject,
         normalized.adoRepo,
-        normalized.myIdentity
+        normalized.myIdentity,
+        normalized.localCheckoutPath
       )
     }
 
@@ -1281,11 +1296,12 @@ const MAX_CHAT_MESSAGES = 200
 /** The persisted chat conversation for a PR, oldest first. */
 export function listChatMessages(prId: number): ChatMessage[] {
   const rows = getDb()
-    .prepare('SELECT role, content FROM chat_messages WHERE pr_id = ? ORDER BY id ASC')
-    .all(prId) as Array<{ role: string; content: string }>
+    .prepare('SELECT role, content, source FROM chat_messages WHERE pr_id = ? ORDER BY id ASC')
+    .all(prId) as Array<{ role: string; content: string; source: string }>
   return rows.map((r) => ({
     role: r.role === 'assistant' ? 'assistant' : 'user',
-    content: r.content
+    content: r.content,
+    source: r.source === 'opencode' ? 'opencode' : 'botspector'
   }))
 }
 
@@ -1294,8 +1310,10 @@ export function addChatMessages(prId: number, messages: ChatMessage[]): void {
   if (messages.length === 0) return
   const db = getDb()
   const tx = db.transaction(() => {
-    const insert = db.prepare('INSERT INTO chat_messages(pr_id, role, content) VALUES(?, ?, ?)')
-    for (const m of messages) insert.run(prId, m.role, m.content)
+    const insert = db.prepare(
+      'INSERT INTO chat_messages(pr_id, role, content, source) VALUES(?, ?, ?, ?)'
+    )
+    for (const m of messages) insert.run(prId, m.role, m.content, m.source ?? 'botspector')
     // Keep only the most recent MAX_CHAT_MESSAGES rows for this PR.
     db.prepare(
       `DELETE FROM chat_messages
@@ -1310,4 +1328,114 @@ export function addChatMessages(prId: number, messages: ChatMessage[]): void {
 /** Delete a PR's entire chat conversation. */
 export function clearChatMessages(prId: number): void {
   getDb().prepare('DELETE FROM chat_messages WHERE pr_id = ?').run(prId)
+}
+
+// ---- OpenCode handoffs ----
+
+interface OpenCodeHandoffRow {
+  session_id: string
+  worktree_path: string
+  branch_name: string
+  base_commit: string
+  seed_message_id: string | null
+  last_synced_message_id: string | null
+  changed_files_json: string
+  created_at: string
+  last_synced_at: string | null
+}
+
+export interface StoredOpenCodeHandoff extends OpenCodeHandoff {
+  seedMessageId: string | null
+  lastSyncedMessageId: string | null
+}
+
+function mapOpenCodeHandoff(row: OpenCodeHandoffRow): StoredOpenCodeHandoff {
+  let changedFiles: OpenCodeChangedFile[] = []
+  try {
+    const parsed = JSON.parse(row.changed_files_json) as unknown
+    if (Array.isArray(parsed)) changedFiles = parsed as OpenCodeChangedFile[]
+  } catch {
+    changedFiles = []
+  }
+  return {
+    sessionId: row.session_id,
+    worktreePath: row.worktree_path,
+    branchName: row.branch_name,
+    baseCommit: row.base_commit,
+    seedMessageId: row.seed_message_id,
+    lastSyncedMessageId: row.last_synced_message_id,
+    changedFiles,
+    createdAt: row.created_at,
+    lastSyncedAt: row.last_synced_at
+  }
+}
+
+export function getOpenCodeHandoff(prId: number): StoredOpenCodeHandoff | null {
+  const row = getDb().prepare('SELECT * FROM opencode_handoffs WHERE pr_id = ?').get(prId) as
+    OpenCodeHandoffRow | undefined
+  return row ? mapOpenCodeHandoff(row) : null
+}
+
+export function createOpenCodeHandoff(
+  prId: number,
+  input: {
+    sessionId: string
+    worktreePath: string
+    branchName: string
+    baseCommit: string
+    seedMessageId: string | null
+  }
+): StoredOpenCodeHandoff {
+  getDb()
+    .prepare(
+      `INSERT INTO opencode_handoffs
+         (pr_id, session_id, worktree_path, branch_name, base_commit, seed_message_id,
+          last_synced_message_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      prId,
+      input.sessionId,
+      input.worktreePath,
+      input.branchName,
+      input.baseCommit,
+      input.seedMessageId,
+      input.seedMessageId
+    )
+  const handoff = getOpenCodeHandoff(prId)
+  if (!handoff) throw new Error('Could not save the OpenCode handoff.')
+  return handoff
+}
+
+export function applyOpenCodeSync(
+  prId: number,
+  messages: ChatMessage[],
+  lastMessageId: string | null,
+  changedFiles: OpenCodeChangedFile[]
+): StoredOpenCodeHandoff {
+  const db = getDb()
+  db.transaction(() => {
+    if (messages.length > 0) {
+      const insert = db.prepare(
+        'INSERT INTO chat_messages(pr_id, role, content, source) VALUES(?, ?, ?, ?)'
+      )
+      for (const message of messages) {
+        insert.run(prId, message.role, message.content, 'opencode')
+      }
+      db.prepare(
+        `DELETE FROM chat_messages
+         WHERE pr_id = ? AND id NOT IN (
+           SELECT id FROM chat_messages WHERE pr_id = ? ORDER BY id DESC LIMIT ?
+         )`
+      ).run(prId, prId, MAX_CHAT_MESSAGES)
+    }
+    db.prepare(
+      `UPDATE opencode_handoffs
+       SET last_synced_message_id = ?, changed_files_json = ?, last_synced_at = datetime('now')
+       WHERE pr_id = ?`
+    ).run(lastMessageId, JSON.stringify(changedFiles), prId)
+  })()
+  const handoff = getOpenCodeHandoff(prId)
+  if (!handoff) throw new Error('OpenCode handoff not found.')
+  return handoff
 }

@@ -11,6 +11,9 @@ import type {
   Finding,
   FindingStatus,
   IpcResult,
+  OpenCodeHandoff,
+  OpenCodeStatus,
+  OpenCodeSyncResult,
   PostedComment,
   PrAdoDetails,
   PullRequest,
@@ -54,8 +57,15 @@ const api = {
     ipcRenderer.invoke(IPC.repositoryProfileSelect, profileId),
   deleteRepositoryProfile: (profileId: string): Promise<IpcResult<Settings>> =>
     ipcRenderer.invoke(IPC.repositoryProfileDelete, profileId),
+  chooseRepositoryCheckout: (repository: string): Promise<IpcResult<string | null>> =>
+    ipcRenderer.invoke(IPC.repositoryChooseCheckout, repository),
   detectIdentity: (profileId: string): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IPC.detectIdentity, profileId),
+  getOpenCodeStatus: (): Promise<IpcResult<OpenCodeStatus>> =>
+    ipcRenderer.invoke(IPC.openCodeStatus),
+  detectOpenCode: (): Promise<IpcResult<OpenCodeStatus>> => ipcRenderer.invoke(IPC.openCodeDetect),
+  chooseOpenCode: (): Promise<IpcResult<OpenCodeStatus>> => ipcRenderer.invoke(IPC.openCodeChoose),
+  clearOpenCode: (): Promise<IpcResult<OpenCodeStatus>> => ipcRenderer.invoke(IPC.openCodeClear),
 
   // copilot
   copilotStartLogin: (): Promise<IpcResult<DeviceCodeInfo>> =>
@@ -219,6 +229,14 @@ const api = {
   getChatHistory: (prId: number): Promise<IpcResult<ChatMessage[]>> =>
     ipcRenderer.invoke(IPC.prChatHistory, prId),
   clearChat: (prId: number): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.prChatClear, prId),
+  getOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeHandoff | null>> =>
+    ipcRenderer.invoke(IPC.prOpenCodeHandoff, prId),
+  startOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeHandoff>> =>
+    ipcRenderer.invoke(IPC.prOpenCodeStart, prId),
+  reopenOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeHandoff>> =>
+    ipcRenderer.invoke(IPC.prOpenCodeReopen, prId),
+  syncOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeSyncResult>> =>
+    ipcRenderer.invoke(IPC.prOpenCodeSync, prId),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)

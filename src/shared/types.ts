@@ -26,6 +26,7 @@ export interface RepositoryProfile {
   adoProject: string
   adoRepo: string
   myIdentity: string
+  localCheckoutPath: string
 }
 
 export interface RepositoryProfileSummary extends RepositoryProfile {
@@ -38,6 +39,7 @@ export interface RepositoryProfileInput {
   adoProject: string
   adoRepo: string
   myIdentity: string
+  localCheckoutPath?: string
   pat?: string
 }
 
@@ -204,6 +206,37 @@ export interface ResolutionAssessment {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  source?: 'botspector' | 'opencode'
+}
+
+export interface OpenCodeStatus {
+  configured: boolean
+  available: boolean
+  executablePath: string | null
+  version: string | null
+  error: string | null
+}
+
+export interface OpenCodeChangedFile {
+  path: string
+  additions: number
+  deletions: number
+}
+
+export interface OpenCodeHandoff {
+  sessionId: string
+  worktreePath: string
+  branchName: string
+  baseCommit: string
+  changedFiles: OpenCodeChangedFile[]
+  createdAt: string
+  lastSyncedAt: string | null
+}
+
+export interface OpenCodeSyncResult {
+  handoff: OpenCodeHandoff
+  importedMessages: number
+  inProgress: boolean
 }
 
 // A named prompt profile that shapes the reviewer for a particular focus (e.g.
