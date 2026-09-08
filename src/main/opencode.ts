@@ -1,14 +1,17 @@
 import { execFile, spawn, type ChildProcess } from 'child_process'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { constants, existsSync } from 'fs'
-import { access, mkdir } from 'fs/promises'
+import { access, mkdir, readFile } from 'fs/promises'
 import { createServer } from 'net'
 import { homedir } from 'os'
-import { basename, delimiter, join, resolve } from 'path'
+import { basename, delimiter, join, resolve, sep } from 'path'
 import { promisify } from 'util'
 import type {
   ChatMessage,
+  Finding,
   OpenCodeChangedFile,
+  OpenCodeCommitPreview,
+  OpenCodeCommitResult,
   OpenCodeStatus,
   PostedComment,
   PullRequest
@@ -19,6 +22,8 @@ const execFileAsync = promisify(execFile)
 const OPEN_CODE_SETTING = 'openCodeExecutablePath'
 const SERVER_START_TIMEOUT_MS = 8_000
 const API_TIMEOUT_MS = 10_000
+export const RESOLUTION_COMMENT_MAX_LENGTH = 200
+const INTERNAL_FINDING_NUMBER = /\bF-\d+\b/i
 
 interface OpenCodeApiMessage {
   info: {
@@ -46,6 +51,12 @@ export interface CreatedOpenCodeSession {
   branchName: string
   baseCommit: string
   seedMessageId: string | null
+}
+
+export interface OpenCodeFileVersion {
+  path: string
+  before: string
+  after: string
 }
 
 export async function getOpenCodeStatus(): Promise<OpenCodeStatus> {
@@ -186,16 +197,19 @@ export async function createOpenCodeSession(input: {
   worktreesRoot: string
   pullRequest: PullRequest
   seed: string
+  finding?: Pick<Finding, 'publicId'>
 }): Promise<CreatedOpenCodeSession> {
-  const { executablePath, checkoutPath, worktreesRoot, pullRequest, seed } = input
+  const { executablePath, checkoutPath, worktreesRoot, pullRequest, seed, finding } = input
   if (!pullRequest.headCommit) throw new Error('Refresh the PR before opening it in OpenCode.')
 
   const suffix = randomUUID().slice(0, 8)
   const shortCommit = pullRequest.headCommit.slice(0, 8)
   const safeRepository = basename(checkoutPath).replace(/[^a-zA-Z0-9._-]/g, '-')
+  const findingSlug = finding?.publicId.toLowerCase().replace(/[^a-z0-9._-]/g, '-')
+  const scope = findingSlug ? `-${findingSlug}` : ''
   const parent = join(worktreesRoot, safeRepository)
-  const worktreePath = join(parent, `pr-${pullRequest.adoPrId}-${shortCommit}-${suffix}`)
-  const branchName = `botspector/pr-${pullRequest.adoPrId}-${shortCommit}-${suffix}`
+  const worktreePath = join(parent, `pr-${pullRequest.adoPrId}${scope}-${shortCommit}-${suffix}`)
+  const branchName = `botspector/pr-${pullRequest.adoPrId}${scope}-${shortCommit}-${suffix}`
   await mkdir(parent, { recursive: true })
 
   try {
@@ -227,7 +241,9 @@ export async function createOpenCodeSession(input: {
         '/session',
         {
           method: 'POST',
-          body: JSON.stringify({ title: `BotSpector PR #${pullRequest.adoPrId}` })
+          body: JSON.stringify({
+            title: `BotSpector PR #${pullRequest.adoPrId}${finding ? ` - ${finding.publicId}` : ''}`
+          })
         }
       )
       const seeded = await openCodeRequest<unknown>(
@@ -360,6 +376,242 @@ export async function readOpenCodeSession(
   }
 }
 
+export async function readOpenCodeWorktreeFiles(
+  worktreePath: string,
+  baseCommit: string,
+  primaryPath: string | null
+): Promise<OpenCodeFileVersion[]> {
+  const primary = primaryPath?.replace(/^\/+/, '') ?? null
+  const paths = (await readOpenCodeChangedPaths(worktreePath, baseCommit))
+    .sort((left, right) => {
+      if (left === primary) return -1
+      if (right === primary) return 1
+      return left.localeCompare(right)
+    })
+    .slice(0, 20)
+  const root = resolve(worktreePath)
+  const files: OpenCodeFileVersion[] = []
+  for (const path of paths) {
+    const absolutePath = resolve(root, path)
+    if (!absolutePath.startsWith(`${root}${sep}`)) continue
+    const [before, after] = await Promise.all([
+      runGit(worktreePath, ['show', `${baseCommit}:${path}`]).catch(() => ''),
+      readFile(absolutePath, 'utf8').catch(() => '')
+    ])
+    files.push({ path, before, after })
+  }
+  return files
+}
+
+export async function getOpenCodeCommitPreview(input: {
+  worktreePath: string
+  branchName: string
+  baseCommit: string
+  lastPushedCommit?: string | null
+  knownPrHeadCommit?: string | null
+  sourceBranch: string
+  findingPublicId: string
+  findingTitle: string
+}): Promise<OpenCodeCommitPreview> {
+  const comparisonCommit = await resolvePublishBase(input)
+  const targetBranch = await validatePublishContext({ ...input, baseCommit: comparisonCommit })
+  const [files, status, commitsAhead, headCommit] = await Promise.all([
+    readOpenCodeChangedPaths(input.worktreePath, comparisonCommit),
+    runGit(input.worktreePath, ['status', '--porcelain=v1', '-z']),
+    runGit(input.worktreePath, ['rev-list', '--count', `${comparisonCommit}..HEAD`]),
+    runGit(input.worktreePath, ['rev-parse', 'HEAD'])
+  ])
+  const suggestedMessage = `Fix: ${input.findingTitle}`.replace(/\s+/g, ' ').trim().slice(0, 200)
+  return {
+    targetBranch,
+    files,
+    hasUncommittedChanges: status.length > 0,
+    commitsAhead: Number.parseInt(commitsAhead.trim(), 10) || 0,
+    suggestedMessage,
+    snapshotId: await createWorktreeSnapshot(input.worktreePath, files, status, headCommit.trim())
+  }
+}
+
+export async function commitOpenCodeToPullRequest(
+  input: {
+    worktreePath: string
+    branchName: string
+    baseCommit: string
+    lastPushedCommit?: string | null
+    knownPrHeadCommit?: string | null
+    sourceBranch: string
+    findingPublicId: string
+    findingTitle: string
+  },
+  commitMessage: string,
+  expectedSnapshotId: string
+): Promise<OpenCodeCommitResult> {
+  const preview = await getOpenCodeCommitPreview(input)
+  const publishBase = await resolvePublishBase(input)
+  if (preview.snapshotId !== expectedSnapshotId) {
+    throw new Error(
+      'The OpenCode worktree changed after the preview. Review the latest files first.'
+    )
+  }
+  if (preview.files.length === 0) {
+    throw new Error('There are no changes in this OpenCode worktree to send to the PR.')
+  }
+
+  let createdCommit = false
+  if (preview.hasUncommittedChanges) {
+    if (typeof commitMessage !== 'string') throw new Error('Enter a valid commit message.')
+    const message = commitMessage.trim()
+    if (!message) throw new Error('Enter a commit message before sending this fix to the PR.')
+    if (message.length > 200) throw new Error('Keep the commit message to 200 characters or fewer.')
+    if (containsInternalFindingNumber(message, input.findingPublicId)) {
+      throw new Error('Remove the internal finding number from the commit message.')
+    }
+    await runGit(input.worktreePath, ['add', '--all'])
+    await runGit(input.worktreePath, ['commit', '-m', message])
+    createdCommit = true
+  }
+
+  const commitMessages = await runGit(input.worktreePath, [
+    'log',
+    '--format=%B',
+    `${publishBase}..HEAD`
+  ])
+  if (containsInternalFindingNumber(commitMessages, input.findingPublicId)) {
+    throw new Error(
+      'An unpublished commit contains an internal finding number. Amend it in OpenCode before pushing.'
+    )
+  }
+
+  await runGit(input.worktreePath, [
+    'fetch',
+    '--no-tags',
+    'origin',
+    `refs/heads/${preview.targetBranch}`
+  ])
+  const remoteCommit = (await runGit(input.worktreePath, ['rev-parse', 'FETCH_HEAD'])).trim()
+  const remoteAlreadyIncluded = await gitIsAncestor(input.worktreePath, remoteCommit, 'HEAD')
+  if (!remoteAlreadyIncluded) {
+    try {
+      await runGit(input.worktreePath, [
+        'rebase',
+        '--onto',
+        remoteCommit,
+        publishBase,
+        input.branchName
+      ])
+    } catch (error) {
+      await runGit(input.worktreePath, ['rebase', '--abort']).catch(() => undefined)
+      throw new Error(
+        `The PR branch changed and this fix could not be rebased automatically. Reopen OpenCode, rebase the source branch, and resolve the conflicts before trying again. ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  }
+
+  try {
+    await runGit(input.worktreePath, ['push', 'origin', `HEAD:refs/heads/${preview.targetBranch}`])
+  } catch (error) {
+    throw new Error(
+      `The PR branch could not be updated; no force push was attempted. ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  return {
+    targetBranch: preview.targetBranch,
+    commit: (await runGit(input.worktreePath, ['rev-parse', 'HEAD'])).trim(),
+    createdCommit
+  }
+}
+
+async function readOpenCodeChangedPaths(
+  worktreePath: string,
+  baseCommit: string
+): Promise<string[]> {
+  const [tracked, untracked] = await Promise.all([
+    runGit(worktreePath, ['diff', '--name-only', '-z', baseCommit, '--']),
+    runGit(worktreePath, ['ls-files', '--others', '--exclude-standard', '-z'])
+  ])
+  return Array.from(
+    new Set(
+      `${tracked}${untracked}`
+        .split('\0')
+        .map((path) => path.replace(/^\/+/, ''))
+        .filter(Boolean)
+    )
+  ).sort((left, right) => left.localeCompare(right))
+}
+
+async function resolvePublishBase(input: {
+  worktreePath: string
+  baseCommit: string
+  lastPushedCommit?: string | null
+  knownPrHeadCommit?: string | null
+}): Promise<string> {
+  if (input.lastPushedCommit) return input.lastPushedCommit
+  if (
+    input.knownPrHeadCommit &&
+    (await gitIsAncestor(input.worktreePath, input.knownPrHeadCommit, 'HEAD'))
+  ) {
+    return input.knownPrHeadCommit
+  }
+  return input.baseCommit
+}
+
+async function validatePublishContext(input: {
+  worktreePath: string
+  branchName: string
+  baseCommit?: string
+  sourceBranch: string
+}): Promise<string> {
+  const currentBranch = (await runGit(input.worktreePath, ['branch', '--show-current'])).trim()
+  if (currentBranch !== input.branchName) {
+    throw new Error(
+      `This worktree is on ${currentBranch || 'a detached HEAD'}, not its expected ${input.branchName} branch.`
+    )
+  }
+  if (input.baseCommit && !(await gitIsAncestor(input.worktreePath, input.baseCommit, 'HEAD'))) {
+    throw new Error('This worktree no longer descends from the PR commit it was created from.')
+  }
+  const targetBranch = input.sourceBranch.replace(/^refs\/heads\//, '').trim()
+  if (!targetBranch) throw new Error('The pull request source branch is unknown.')
+  try {
+    await runGit(input.worktreePath, ['check-ref-format', `refs/heads/${targetBranch}`])
+  } catch {
+    throw new Error(`The pull request source branch is invalid: ${input.sourceBranch}`)
+  }
+  return targetBranch
+}
+
+async function createWorktreeSnapshot(
+  worktreePath: string,
+  files: string[],
+  status: string,
+  headCommit: string
+): Promise<string> {
+  const fileHashes = await Promise.all(
+    files.map(async (path) => {
+      const hash = await runGit(worktreePath, ['hash-object', '--no-filters', '--', path]).catch(
+        () => '<deleted>'
+      )
+      return `${path}\0${hash.trim()}`
+    })
+  )
+  return createHash('sha256')
+    .update(headCommit)
+    .update('\0')
+    .update(status)
+    .update('\0')
+    .update(fileHashes.join('\0'))
+    .digest('hex')
+}
+
+async function gitIsAncestor(cwd: string, ancestor: string, descendant: string): Promise<boolean> {
+  try {
+    await runGit(cwd, ['merge-base', '--is-ancestor', ancestor, descendant])
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function messagesAfterOpenCodeAnchor(
   messages: OpenCodeApiMessage[],
   seedMessageId: string | null,
@@ -381,10 +633,7 @@ export function messagesAfterOpenCodeAnchor(
     }
     lastMessageId = message.info.id
     if (message.info.id === seedMessageId) continue
-    const content = message.parts
-      .filter((part) => part.type === 'text' && !part.ignored && part.text?.trim())
-      .map((part) => part.text?.trim() ?? '')
-      .join('\n\n')
+    const content = visibleOpenCodeMessageText(message)
     if (content) imported.push({ role: message.info.role, content, source: 'opencode' })
   }
   return {
@@ -394,22 +643,107 @@ export function messagesAfterOpenCodeAnchor(
   }
 }
 
+export function openCodeResolutionComment(
+  messages: OpenCodeApiMessage[],
+  seedMessageId: string | null,
+  findingPublicId?: string
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (
+      message.info.id === seedMessageId ||
+      message.info.role !== 'assistant' ||
+      !message.info.time?.completed
+    ) {
+      continue
+    }
+    const content = visibleOpenCodeMessageText(message)
+    if (content) return resolutionCommentFromText(content, findingPublicId)
+  }
+  return null
+}
+
+export function resolutionCommentFromText(
+  content: string,
+  findingPublicId?: string
+): string | null {
+  const marker =
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:Suggested\s+)?(?:Azure DevOps\s+)?Resolution comment:(?:\*\*)?\s*/i
+  const match = marker.exec(content)
+  let comment = (match ? content.slice(match.index + match[0].length) : content)
+    .replace(/\b(?:BotSpector\s+)?finding\s+F-\d+\b/gi, 'this issue')
+    .replace(/\bF-\d+\b/gi, 'this issue')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (findingPublicId) {
+    const escapedId = findingPublicId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    comment = comment
+      .replace(
+        new RegExp(`\\b(?:BotSpector\\s+)?finding\\s+${escapedId}(?=$|[^A-Za-z0-9])`, 'gi'),
+        'this issue'
+      )
+      .replace(new RegExp(`(^|[^A-Za-z0-9])${escapedId}(?=$|[^A-Za-z0-9])`, 'gi'), '$1this issue')
+  }
+  comment = comment.replace(/^[-*]\s+/, '').trim()
+  const firstSentence = comment.match(/^.*?(?:[.!?](?=\s|$)|$)/)?.[0]?.trim()
+  if (firstSentence) comment = firstSentence
+  if (!comment) return null
+  if (comment.length <= RESOLUTION_COMMENT_MAX_LENGTH) return comment
+  const shortened = comment.slice(0, RESOLUTION_COMMENT_MAX_LENGTH - 3)
+  const wordBoundary = shortened.lastIndexOf(' ')
+  return `${shortened.slice(0, wordBoundary > 0 ? wordBoundary : shortened.length)}...`
+}
+
+export function containsInternalFindingNumber(content: string, findingPublicId?: string): boolean {
+  if (INTERNAL_FINDING_NUMBER.test(content)) return true
+  if (!findingPublicId) return false
+  const escapedId = findingPublicId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^A-Za-z0-9])${escapedId}(?=$|[^A-Za-z0-9])`, 'i').test(content)
+}
+
+function visibleOpenCodeMessageText(message: OpenCodeApiMessage): string {
+  return message.parts
+    .filter((part) => part.type === 'text' && !part.ignored && part.text?.trim())
+    .map((part) => part.text?.trim() ?? '')
+    .join('\n\n')
+}
+
 export function buildOpenCodeSeed(input: {
   pullRequest: PullRequest
   pullRequestContext: string
   findingsSummary: string
   priorComments: PostedComment[]
   history: ChatMessage[]
+  finding?: Finding
 }): string {
-  const { pullRequest, pullRequestContext, findingsSummary, priorComments, history } = input
+  const { pullRequest, pullRequestContext, findingsSummary, priorComments, history, finding } =
+    input
   const comments = priorComments
     .map((comment) => `- ${comment.findingTitle ?? 'PR comment'}: ${comment.commentText}`)
     .join('\n')
-  const conversation = history
+  const scopedHistory = finding
+    ? history.filter((message) => message.findingId == null || message.findingId === finding.id)
+    : history
+  const conversation = scopedHistory
     .slice(-40)
     .map((message) => `${message.role === 'user' ? 'User' : 'BotSpector'}: ${message.content}`)
     .join('\n\n')
     .slice(-20_000)
+  const findingReplies = finding?.comment?.replies.length
+    ? finding.comment.replies.map((reply) => `${reply.author}: ${reply.text}`).join('\n\n')
+    : '(none)'
+  const workScope = finding
+    ? `Work scope: BotSpector finding ${finding.publicId}
+Severity: ${finding.bucket}
+Title: ${finding.title}
+Concern: ${finding.description}
+Location: ${finding.filePath ?? '(not file-specific)'}${finding.line ? `:${finding.line}` : ''}
+Finding status: ${finding.status}
+Review comment: ${finding.comment?.draftText ?? '(not drafted or posted)'}
+Author replies: ${findingReplies}
+
+This OpenCode session is durably linked to ${finding.publicId}. Address this finding only, apart from adjacent changes required to implement or test its fix. Do not silently switch to another finding. When finished, state whether the fix is ready in this worktree, list the validation performed, and identify anything still preventing ${finding.publicId} from being resolved.`
+    : 'Work scope: the pull request as a whole.'
 
   return `You are continuing a pull-request review from BotSpector in an isolated Git worktree.
 
@@ -417,6 +751,8 @@ Pull request: #${pullRequest.adoPrId} ${pullRequest.title}
 Source: ${pullRequest.sourceBranch}
 Target: ${pullRequest.targetBranch}
 Head commit: ${pullRequest.headCommit}
+
+${workScope}
 
 PR context:
 ${pullRequestContext || '(no PR context was available)'}
@@ -430,7 +766,7 @@ ${comments || '(none)'}
 BotSpector conversation so far:
 ${conversation || '(no chat yet)'}
 
-Continue from this context. Inspect the local code before editing, make only the changes the user asks for, and run relevant checks. When finished, summarize what changed, tests run, and any unresolved review findings so BotSpector can sync the visible conversation back.`
+Continue from this context. Inspect the local code before editing, make only the changes the user asks for, and run relevant checks. Leave the result uncommitted and do not push it; the user will explicitly approve publishing from BotSpector. When finished, summarize what changed, tests run, and any unresolved review findings so BotSpector can sync the visible conversation back. End your final response with a \`Resolution comment:\` section containing one accurate sentence of no more than ${RESOLUTION_COMMENT_MAX_LENGTH} characters for the existing Azure DevOps thread. Do not mention BotSpector or internal finding numbers such as ${finding?.publicId ?? 'F-001'} in that comment.`
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {

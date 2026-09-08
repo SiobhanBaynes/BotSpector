@@ -771,14 +771,19 @@ export async function assessFindingResolution(
     commentText: string
     replies: CommentReply[]
     diffEvidence: string
+    evidenceKind?: 'pull-request' | 'worktree'
   },
   model: string
 ): Promise<ResolutionAssessment> {
-  const { finding, commentText, replies, diffEvidence } = input
+  const { finding, commentText, replies, diffEvidence, evidenceKind = 'pull-request' } = input
   const conversation = replies.length
     ? replies.map((r) => `${r.author}: ${r.text}`).join('\n\n')
     : '(no replies)'
   const hasEvidence = diffEvidence.trim().length > 0
+  const evidenceLabel =
+    evidenceKind === 'worktree'
+      ? 'isolated OpenCode worktree diffs (base commit → current worktree)'
+      : 'PR-wide changed-file diffs (base → head)'
   const result = await complete({
     model,
     temperature: 0.1,
@@ -786,8 +791,8 @@ export async function assessFindingResolution(
       {
         role: 'system',
         content:
-          'You judge whether a code-review finding has been resolved. The PR-wide changed-file ' +
-          'diffs (base → head) are the primary evidence: base your verdict on what the code ' +
+          `You judge whether a code-review finding has been addressed. The ${evidenceLabel} ` +
+          'are the primary evidence: base your verdict on what the code ' +
           'actually shows. Author replies are only weak hints — they cannot make a finding ' +
           '"resolved" on their own if the code does not show the fix.\n\n' +
           'Important:\n' +
@@ -817,7 +822,7 @@ export async function assessFindingResolution(
           `Finding [${finding.bucket}] ${finding.title}\n` +
           `${finding.description}\n` +
           `File: ${finding.filePath ?? 'n/a'}${finding.line ? ` (originally line ${finding.line})` : ''}\n\n` +
-          `PR-wide changed-file diffs base → head (primary evidence):\n` +
+          `${evidenceLabel} (primary evidence):\n` +
           `${hasEvidence ? diffEvidence : '(unavailable — prefer "unclear" unless the reply itself contradicts a fix)'}\n\n` +
           `Review comment we posted (context only):\n${commentText}\n\n` +
           `Author replies (hint only, do not rely on):\n${conversation}`
@@ -1012,7 +1017,8 @@ export async function draftComment(finding: Finding, model: string): Promise<str
         content:
           'You write pull-request review comments. Write a single, polite, constructive ' +
           'comment a reviewer could post directly. Keep jargon to a minimum. Do not include ' +
-          'a greeting or sign-off — just the comment body.'
+          'a greeting, sign-off, BotSpector tracking details, or internal finding identifiers ' +
+          'such as F-001 — just the comment body.'
       },
       {
         role: 'user',
@@ -1042,6 +1048,7 @@ export async function refineComment(
         content:
           'You revise a pull-request review comment. Apply the requested change while ' +
           'keeping the original meaning and any specifics (file names, identifiers). ' +
+          'Remove BotSpector tracking details and internal finding identifiers such as F-001. ' +
           'Return ONLY the revised comment body — no greeting, sign-off, quotes, or commentary.'
       },
       {

@@ -10,7 +10,10 @@ import type {
   FileDiff,
   Finding,
   FindingStatus,
+  FindingThreadResolutionResult,
   IpcResult,
+  OpenCodeCommitPreview,
+  OpenCodeCommitResult,
   OpenCodeHandoff,
   OpenCodeStatus,
   OpenCodeSyncResult,
@@ -207,13 +210,22 @@ const api = {
     ipcRenderer.invoke(IPC.findingPostComment, findingId),
   setThreadStatus: (findingId: number, status: string): Promise<IpcResult<Review | null>> =>
     ipcRenderer.invoke(IPC.findingSetThreadStatus, findingId, status),
+  commentAndResolveFinding: (
+    findingId: number,
+    content: string
+  ): Promise<IpcResult<FindingThreadResolutionResult>> =>
+    ipcRenderer.invoke(IPC.findingCommentAndResolve, findingId, content),
   checkFindingResolved: (
     findingId: number,
     model?: string
   ): Promise<IpcResult<ResolutionAssessment>> =>
     ipcRenderer.invoke(IPC.findingCheckResolved, findingId, model),
-  chatAboutPr: (prId: number, message: string, model?: string): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.prChat, prId, message, model),
+  chatAboutPr: (
+    prId: number,
+    message: string,
+    model?: string,
+    findingId?: number
+  ): Promise<IpcResult<string>> => ipcRenderer.invoke(IPC.prChat, prId, message, model, findingId),
   createFindingFromChat: (
     prId: number,
     assistantMessage: string,
@@ -229,14 +241,26 @@ const api = {
   getChatHistory: (prId: number): Promise<IpcResult<ChatMessage[]>> =>
     ipcRenderer.invoke(IPC.prChatHistory, prId),
   clearChat: (prId: number): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.prChatClear, prId),
-  getOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeHandoff | null>> =>
-    ipcRenderer.invoke(IPC.prOpenCodeHandoff, prId),
-  startOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeHandoff>> =>
-    ipcRenderer.invoke(IPC.prOpenCodeStart, prId),
-  reopenOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeHandoff>> =>
-    ipcRenderer.invoke(IPC.prOpenCodeReopen, prId),
-  syncOpenCodeHandoff: (prId: number): Promise<IpcResult<OpenCodeSyncResult>> =>
-    ipcRenderer.invoke(IPC.prOpenCodeSync, prId),
+  getOpenCodeHandoffs: (prId: number): Promise<IpcResult<OpenCodeHandoff[]>> =>
+    ipcRenderer.invoke(IPC.prOpenCodeHandoffs, prId),
+  startOpenCodeForFinding: (findingId: number): Promise<IpcResult<OpenCodeHandoff>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeStart, findingId),
+  reopenOpenCodeForFinding: (findingId: number): Promise<IpcResult<OpenCodeHandoff>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeReopen, findingId),
+  syncOpenCodeForFinding: (findingId: number): Promise<IpcResult<OpenCodeSyncResult>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeSync, findingId),
+  checkOpenCodeFix: (findingId: number, model?: string): Promise<IpcResult<OpenCodeHandoff>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeCheckFix, findingId, model),
+  getOpenCodeResolutionComment: (findingId: number): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeResolutionComment, findingId),
+  getOpenCodeCommitPreview: (findingId: number): Promise<IpcResult<OpenCodeCommitPreview>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeCommitPreview, findingId),
+  commitOpenCodeToPr: (
+    findingId: number,
+    commitMessage: string,
+    snapshotId: string
+  ): Promise<IpcResult<OpenCodeCommitResult>> =>
+    ipcRenderer.invoke(IPC.findingOpenCodeCommit, findingId, commitMessage, snapshotId),
 
   // diagnostics
   openLogs: (): Promise<IpcResult<null>> => ipcRenderer.invoke(IPC.logsOpen)

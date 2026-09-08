@@ -13,7 +13,10 @@ import type {
   FileDiff,
   Finding,
   FindingStatus,
+  FindingThreadResolutionResult,
   IpcResult,
+  OpenCodeCommitPreview,
+  OpenCodeCommitResult,
   OpenCodeHandoff,
   OpenCodeStatus,
   OpenCodeSyncResult,
@@ -56,6 +59,7 @@ import {
   fetchImageAsDataUrl,
   fetchPullRequestComments,
   getPullRequestContext,
+  replyAndResolvePullRequestThread,
   replyToPullRequestThread,
   postPullRequestComment
 } from './mcp/adoService'
@@ -83,13 +87,20 @@ import { openLogs, logger } from './logger'
 import {
   buildOpenCodeSeed,
   clearOpenCodeConfiguration,
+  commitOpenCodeToPullRequest,
+  containsInternalFindingNumber,
   configureOpenCode,
   createOpenCodeSession,
   detectOpenCode,
+  getOpenCodeCommitPreview,
   getOpenCodeStatus,
   launchOpenCodeTui,
   messagesAfterOpenCodeAnchor,
+  openCodeResolutionComment,
   readOpenCodeSession,
+  readOpenCodeWorktreeFiles,
+  RESOLUTION_COMMENT_MAX_LENGTH,
+  resolutionCommentFromText,
   validateRepositoryCheckout
 } from './opencode'
 
@@ -144,14 +155,57 @@ function findingsSummaryForPr(prId: number): string {
 
 function publicOpenCodeHandoff(handoff: repo.StoredOpenCodeHandoff): OpenCodeHandoff {
   return {
+    findingId: handoff.findingId,
+    findingPublicId: handoff.findingPublicId,
     sessionId: handoff.sessionId,
     worktreePath: handoff.worktreePath,
     branchName: handoff.branchName,
     baseCommit: handoff.baseCommit,
+    lastPushedCommit: handoff.lastPushedCommit,
     changedFiles: handoff.changedFiles,
+    fixAssessment: handoff.fixAssessment,
+    prAssessment: handoff.prAssessment,
     createdAt: handoff.createdAt,
     lastSyncedAt: handoff.lastSyncedAt
   }
+}
+
+async function ensureOpenCodeHandoff(
+  findingId: number,
+  executablePath: string
+): Promise<repo.StoredOpenCodeHandoff> {
+  const existing = repo.getOpenCodeHandoffForFinding(findingId)
+  if (existing) return existing
+
+  const finding = repo.getFinding(findingId)
+  if (!finding) throw new Error('Finding not found')
+  const prId = repo.getPrIdForFinding(findingId)
+  if (prId == null) throw new Error('Could not find the pull request for this finding.')
+  const pullRequest = repo.getPullRequest(prId)
+  if (!pullRequest) throw new Error('Pull request not found')
+  const profile = repo.getCurrentRepositoryProfile()
+  if (!profile?.localCheckoutPath) {
+    throw new Error('Choose a local checkout for this repository in Settings first.')
+  }
+  const checkoutPath = await validateRepositoryCheckout(profile.localCheckoutPath, profile.adoRepo)
+  const context = await getPullRequestContext(pullRequest.adoPrId)
+  const seed = buildOpenCodeSeed({
+    pullRequest,
+    pullRequestContext: context.summary,
+    findingsSummary: findingsSummaryForPr(prId),
+    priorComments: repo.listPostedComments(prId),
+    history: repo.listChatMessages(prId),
+    finding
+  })
+  const created = await createOpenCodeSession({
+    executablePath,
+    checkoutPath,
+    worktreesRoot: join(app.getPath('userData'), 'opencode-worktrees'),
+    pullRequest,
+    seed,
+    finding
+  })
+  return repo.createOpenCodeHandoff(prId, findingId, created)
 }
 
 // Add ourselves as an optional reviewer on a PR — best-effort and non-blocking.
@@ -1280,7 +1334,6 @@ export function registerIpcHandlers(): void {
       try {
         const finding = repo.getFinding(findingId)
         if (!finding) throw new Error('Finding not found')
-        if (!finding.comment) throw new Error('This finding has no posted comment to assess')
         const model = resolveModel(modelArg)
         const review = repo.getReviewById(finding.reviewId)
         const pr = review ? repo.getPullRequest(review.prId) : null
@@ -1288,9 +1341,14 @@ export function registerIpcHandlers(): void {
         // Compare every relevant changed file so fixes made at another layer
         // (for example, at a caller rather than the commented helper) are visible.
         let diffEvidence = ''
+        let checkedCommit = pr?.headCommit || review?.reviewedCommit || ''
         if (pr) {
           const range = await fetchPullRequestDiffRange(pr.adoPrId).catch(() => null)
           const headCommit = range?.head || pr.headCommit || undefined
+          checkedCommit = headCommit || checkedCommit
+          if (range?.head && range.head !== pr.headCommit) {
+            repo.updatePullRequestHeadCommit(pr.id, range.head)
+          }
           const baseCommit = range?.base || undefined
           const changedPaths =
             baseCommit && headCommit
@@ -1326,12 +1384,15 @@ export function registerIpcHandlers(): void {
         const assessment = await assessFindingResolution(
           {
             finding,
-            commentText: finding.comment.draftText,
-            replies: finding.comment.replies,
+            commentText: finding.comment?.draftText ?? finding.description,
+            replies: finding.comment?.replies ?? [],
             diffEvidence
           },
           model
         )
+        if (repo.getOpenCodeHandoffForFinding(findingId)) {
+          repo.setOpenCodePrAssessment(findingId, assessment, checkedCommit)
+        }
         return ok(assessment)
       } catch (e) {
         return fail(e)
@@ -1341,18 +1402,35 @@ export function registerIpcHandlers(): void {
 
   handlePullRequest(
     IPC.prChat,
-    async (_e, prId: number, message: string, modelArg?: string): Promise<IpcResult<string>> => {
+    async (
+      _e,
+      prId: number,
+      message: string,
+      modelArg?: string,
+      findingId?: number
+    ): Promise<IpcResult<string>> => {
       try {
         const pr = repo.getPullRequest(prId)
         if (!pr) throw new Error('Pull request not found')
         const text = message.trim()
         if (!text) throw new Error('Message is empty')
+        if (findingId != null && repo.getPrIdForFinding(findingId) !== prId) {
+          throw new Error('The selected finding does not belong to this pull request.')
+        }
         const model = resolveModel(modelArg)
         const findingsSummary = findingsSummaryForPr(prId)
         const priorComments = repo.listPostedComments(prId)
+        const scopedHistory = repo
+          .listChatMessages(prId)
+          .filter(
+            (chatMessage) =>
+              findingId == null ||
+              chatMessage.findingId == null ||
+              chatMessage.findingId === findingId
+          )
         const history: ChatMessage[] = [
-          ...repo.listChatMessages(prId),
-          { role: 'user', content: text }
+          ...scopedHistory,
+          { role: 'user', content: text, findingId }
         ]
         const reply = await chatAboutPullRequest(
           { adoPrId: pr.adoPrId, findingsSummary, priorComments, history },
@@ -1360,8 +1438,8 @@ export function registerIpcHandlers(): void {
         )
         // Only persist once the turn succeeds, so a failed call leaves no orphan.
         repo.addChatMessages(prId, [
-          { role: 'user', content: text },
-          { role: 'assistant', content: reply }
+          { role: 'user', content: text, findingId },
+          { role: 'assistant', content: reply, findingId }
         ])
         return ok(reply)
       } catch (e) {
@@ -1457,58 +1535,23 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  handlePullRequest(
-    IPC.prOpenCodeHandoff,
-    (_e, prId: number): IpcResult<OpenCodeHandoff | null> => {
-      try {
-        const handoff = repo.getOpenCodeHandoff(prId)
-        return ok(handoff ? publicOpenCodeHandoff(handoff) : null)
-      } catch (e) {
-        return fail(e)
-      }
+  handlePullRequest(IPC.prOpenCodeHandoffs, (_e, prId: number): IpcResult<OpenCodeHandoff[]> => {
+    try {
+      return ok(repo.listOpenCodeHandoffs(prId).map(publicOpenCodeHandoff))
+    } catch (e) {
+      return fail(e)
     }
-  )
+  })
 
-  handlePullRequest(
-    IPC.prOpenCodeStart,
-    async (_e, prId: number): Promise<IpcResult<OpenCodeHandoff>> => {
+  handleFinding(
+    IPC.findingOpenCodeStart,
+    async (_e, findingId: number): Promise<IpcResult<OpenCodeHandoff>> => {
       try {
         const status = await getOpenCodeStatus()
         if (!status.available || !status.executablePath) {
           throw new Error(status.error ?? 'Configure OpenCode in Settings first.')
         }
-        const existing = repo.getOpenCodeHandoff(prId)
-        if (existing) {
-          await launchOpenCodeTui(status.executablePath, existing.worktreePath, existing.sessionId)
-          return ok(publicOpenCodeHandoff(existing))
-        }
-
-        const pullRequest = repo.getPullRequest(prId)
-        if (!pullRequest) throw new Error('Pull request not found')
-        const profile = repo.getCurrentRepositoryProfile()
-        if (!profile?.localCheckoutPath) {
-          throw new Error('Choose a local checkout for this repository in Settings first.')
-        }
-        const checkoutPath = await validateRepositoryCheckout(
-          profile.localCheckoutPath,
-          profile.adoRepo
-        )
-        const context = await getPullRequestContext(pullRequest.adoPrId)
-        const seed = buildOpenCodeSeed({
-          pullRequest,
-          pullRequestContext: context.summary,
-          findingsSummary: findingsSummaryForPr(prId),
-          priorComments: repo.listPostedComments(prId),
-          history: repo.listChatMessages(prId)
-        })
-        const created = await createOpenCodeSession({
-          executablePath: status.executablePath,
-          checkoutPath,
-          worktreesRoot: join(app.getPath('userData'), 'opencode-worktrees'),
-          pullRequest,
-          seed
-        })
-        const handoff = repo.createOpenCodeHandoff(prId, created)
+        const handoff = await ensureOpenCodeHandoff(findingId, status.executablePath)
         await launchOpenCodeTui(status.executablePath, handoff.worktreePath, handoff.sessionId)
         return ok(publicOpenCodeHandoff(handoff))
       } catch (e) {
@@ -1517,16 +1560,16 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  handlePullRequest(
-    IPC.prOpenCodeReopen,
-    async (_e, prId: number): Promise<IpcResult<OpenCodeHandoff>> => {
+  handleFinding(
+    IPC.findingOpenCodeReopen,
+    async (_e, findingId: number): Promise<IpcResult<OpenCodeHandoff>> => {
       try {
         const status = await getOpenCodeStatus()
         if (!status.available || !status.executablePath) {
           throw new Error(status.error ?? 'Configure OpenCode in Settings first.')
         }
-        const handoff = repo.getOpenCodeHandoff(prId)
-        if (!handoff) throw new Error('No OpenCode handoff exists for this PR.')
+        const handoff = repo.getOpenCodeHandoffForFinding(findingId)
+        if (!handoff) throw new Error('No OpenCode work session exists for this finding.')
         await launchOpenCodeTui(status.executablePath, handoff.worktreePath, handoff.sessionId)
         return ok(publicOpenCodeHandoff(handoff))
       } catch (e) {
@@ -1535,16 +1578,16 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  handlePullRequest(
-    IPC.prOpenCodeSync,
-    async (_e, prId: number): Promise<IpcResult<OpenCodeSyncResult>> => {
+  handleFinding(
+    IPC.findingOpenCodeSync,
+    async (_e, findingId: number): Promise<IpcResult<OpenCodeSyncResult>> => {
       try {
         const status = await getOpenCodeStatus()
         if (!status.available || !status.executablePath) {
           throw new Error(status.error ?? 'Configure OpenCode in Settings first.')
         }
-        const handoff = repo.getOpenCodeHandoff(prId)
-        if (!handoff) throw new Error('No OpenCode handoff exists for this PR.')
+        const handoff = repo.getOpenCodeHandoffForFinding(findingId)
+        if (!handoff) throw new Error('No OpenCode work session exists for this finding.')
         const snapshot = await readOpenCodeSession(
           status.executablePath,
           handoff.worktreePath,
@@ -1556,7 +1599,7 @@ export function registerIpcHandlers(): void {
           handoff.lastSyncedMessageId
         )
         const synced = repo.applyOpenCodeSync(
-          prId,
+          findingId,
           imported.messages,
           imported.lastMessageId,
           snapshot.changedFiles
@@ -1566,6 +1609,163 @@ export function registerIpcHandlers(): void {
           importedMessages: imported.messages.length,
           inProgress: imported.inProgress
         })
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handleFinding(
+    IPC.findingOpenCodeCheckFix,
+    async (_e, findingId: number, modelArg?: string): Promise<IpcResult<OpenCodeHandoff>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        const handoff = repo.getOpenCodeHandoffForFinding(findingId)
+        if (!handoff) throw new Error('No OpenCode work session exists for this finding.')
+        const files = await readOpenCodeWorktreeFiles(
+          handoff.worktreePath,
+          handoff.baseCommit,
+          finding.filePath
+        )
+        const diffEvidence = buildResolutionEvidence(files, finding.filePath)
+        const assessment = await assessFindingResolution(
+          {
+            finding,
+            commentText: finding.comment?.draftText ?? finding.description,
+            replies: finding.comment?.replies ?? [],
+            diffEvidence,
+            evidenceKind: 'worktree'
+          },
+          resolveModel(modelArg)
+        )
+        return ok(publicOpenCodeHandoff(repo.setOpenCodeFixAssessment(findingId, assessment)))
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handleFinding(
+    IPC.findingOpenCodeResolutionComment,
+    async (_e, findingId: number): Promise<IpcResult<string>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        const handoff = repo.getOpenCodeHandoffForFinding(findingId)
+        if (!handoff) throw new Error('No OpenCode work session exists for this finding.')
+        const prId = repo.getPrIdForFinding(findingId)
+        if (prId == null) throw new Error('Could not find the pull request for this finding.')
+
+        let liveError: string | null = null
+        const status = await getOpenCodeStatus()
+        if (status.available && status.executablePath) {
+          try {
+            const snapshot = await readOpenCodeSession(
+              status.executablePath,
+              handoff.worktreePath,
+              handoff.sessionId
+            )
+            const comment = openCodeResolutionComment(
+              snapshot.messages,
+              handoff.seedMessageId,
+              finding.publicId
+            )
+            if (comment) return ok(comment)
+          } catch (error) {
+            liveError = error instanceof Error ? error.message : String(error)
+          }
+        } else {
+          liveError = status.error ?? 'OpenCode is not available.'
+        }
+
+        const syncedMessages = repo.listChatMessages(prId)
+        for (let index = syncedMessages.length - 1; index >= 0; index -= 1) {
+          const message = syncedMessages[index]
+          if (
+            message.source !== 'opencode' ||
+            message.role !== 'assistant' ||
+            message.findingId !== findingId
+          ) {
+            continue
+          }
+          const comment = resolutionCommentFromText(message.content, finding.publicId)
+          if (comment) return ok(comment)
+        }
+
+        throw new Error(
+          liveError
+            ? `Could not load a completed OpenCode response for this finding. ${liveError}`
+            : 'OpenCode has not produced a completed response for this finding yet.'
+        )
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handleFinding(
+    IPC.findingOpenCodeCommitPreview,
+    async (_e, findingId: number): Promise<IpcResult<OpenCodeCommitPreview>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        const handoff = repo.getOpenCodeHandoffForFinding(findingId)
+        if (!handoff) throw new Error('No OpenCode work session exists for this finding.')
+        const prId = repo.getPrIdForFinding(findingId)
+        const pr = prId == null ? null : repo.getPullRequest(prId)
+        if (!pr?.sourceBranch) throw new Error('The pull request source branch is unknown.')
+        return ok(
+          await getOpenCodeCommitPreview({
+            worktreePath: handoff.worktreePath,
+            branchName: handoff.branchName,
+            baseCommit: handoff.baseCommit,
+            lastPushedCommit: handoff.lastPushedCommit,
+            knownPrHeadCommit: pr.headCommit,
+            sourceBranch: pr.sourceBranch,
+            findingPublicId: finding.publicId,
+            findingTitle: finding.title
+          })
+        )
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
+  handleFinding(
+    IPC.findingOpenCodeCommit,
+    async (
+      _e,
+      findingId: number,
+      commitMessage: string,
+      snapshotId: string
+    ): Promise<IpcResult<OpenCodeCommitResult>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding) throw new Error('Finding not found')
+        const handoff = repo.getOpenCodeHandoffForFinding(findingId)
+        if (!handoff) throw new Error('No OpenCode work session exists for this finding.')
+        const prId = repo.getPrIdForFinding(findingId)
+        const pr = prId == null ? null : repo.getPullRequest(prId)
+        if (!pr?.sourceBranch) throw new Error('The pull request source branch is unknown.')
+        const result = await commitOpenCodeToPullRequest(
+          {
+            worktreePath: handoff.worktreePath,
+            branchName: handoff.branchName,
+            baseCommit: handoff.baseCommit,
+            lastPushedCommit: handoff.lastPushedCommit,
+            knownPrHeadCommit: pr.headCommit,
+            sourceBranch: pr.sourceBranch,
+            findingPublicId: finding.publicId,
+            findingTitle: finding.title
+          },
+          commitMessage,
+          snapshotId
+        )
+        repo.setOpenCodeLastPushedCommit(findingId, result.commit)
+        repo.updatePullRequestHeadCommit(pr.id, result.commit)
+        return ok(result)
       } catch (e) {
         return fail(e)
       }
@@ -1682,6 +1882,55 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  handleFinding(
+    IPC.findingCommentAndResolve,
+    async (
+      _e,
+      findingId: number,
+      content: string
+    ): Promise<IpcResult<FindingThreadResolutionResult>> => {
+      try {
+        const finding = repo.getFinding(findingId)
+        if (!finding?.comment?.adoThreadId) {
+          throw new Error('This finding has no posted comment thread to resolve')
+        }
+        if (typeof content !== 'string') throw new Error('Enter a valid reply')
+        const text = content.trim().replace(/\s+/g, ' ')
+        if (!text) throw new Error('Reply is empty')
+        if (text.length > RESOLUTION_COMMENT_MAX_LENGTH) {
+          throw new Error(`Keep the reply to ${RESOLUTION_COMMENT_MAX_LENGTH} characters or fewer`)
+        }
+        if (containsInternalFindingNumber(text, finding.publicId)) {
+          throw new Error('Remove internal finding numbers from the reply before posting')
+        }
+        const review = repo.getReviewById(finding.reviewId)
+        const pr = review ? repo.getPullRequest(review.prId) : null
+        if (!pr) throw new Error('Could not find the pull request for this finding')
+
+        const result = await replyAndResolvePullRequestThread(
+          pr.adoPrId,
+          finding.comment.adoThreadId,
+          text
+        )
+        let warning = result.warning
+        try {
+          await syncCommentThreads(pr.id)
+        } catch (error) {
+          const syncWarning = `Azure DevOps was updated, but BotSpector could not refresh the thread. ${error instanceof Error ? error.message : String(error)}`
+          warning = warning ? `${warning} ${syncWarning}` : syncWarning
+        }
+        logger.info(`commented on finding ${finding.publicId} thread`, {
+          adoPrId: pr.adoPrId,
+          threadId: finding.comment.adoThreadId,
+          resolved: result.resolved
+        })
+        return ok({ resolved: result.resolved, warning })
+      } catch (e) {
+        return fail(e)
+      }
+    }
+  )
+
   handleFinding(IPC.findingPostComment, async (_e, findingId: number): Promise<IpcResult<null>> => {
     try {
       const finding = repo.getFinding(findingId)
@@ -1695,7 +1944,10 @@ export function registerIpcHandlers(): void {
 
       // Post only the comment text; the finding id/severity are tracked
       // internally via the Azure DevOps thread id and never exposed in ADO.
-      const body = finding.comment.draftText
+      const body = finding.comment.draftText.trim()
+      if (containsInternalFindingNumber(body, finding.publicId)) {
+        throw new Error('Remove internal finding numbers from the comment before posting')
+      }
       logger.info(`posting comment for ${finding.publicId} to ADO PR #${pr.adoPrId}`)
       const threadId = await postPullRequestComment(
         pr.adoPrId,
@@ -1718,7 +1970,7 @@ export function registerIpcHandlers(): void {
           findingPublicId: finding.publicId,
           findingTitle: finding.title,
           bucket: finding.bucket,
-          commentText: finding.comment.draftText
+          commentText: body
         })
       }
       logger.info(`posted comment for ${finding.publicId} (thread ${threadId ?? 'n/a'})`)

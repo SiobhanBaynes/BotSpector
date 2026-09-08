@@ -17,6 +17,12 @@ interface Props {
   onClearPinnedChange?: () => void
   /** Called after a finding is created from a chat message, so the review reloads. */
   onFindingCreated?: () => void
+  /** Return to the finding linked to a chat turn. */
+  onOpenFinding?: (findingId: number) => void
+  /** Keep finding cards in sync with handoffs opened or synced here. */
+  onOpenCodeChanged?: (handoff: OpenCodeHandoff) => void
+  /** Reload persisted chat after a sync initiated from a finding card. */
+  historyRefreshNonce?: number
 }
 
 // Per-message state for the "Create finding" action, keyed by message index.
@@ -32,8 +38,13 @@ export function ChatTab({
   localCheckoutConfigured,
   pinnedChange,
   onClearPinnedChange,
-  onFindingCreated
+  onFindingCreated,
+  onOpenFinding,
+  onOpenCodeChanged,
+  historyRefreshNonce = 0
 }: Props): JSX.Element {
+  const activeFinding = pinnedChange?.kind === 'finding' ? pinnedChange : null
+  const activeFindingId = activeFinding?.findingId
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -60,20 +71,46 @@ export function ChatTab({
     setFindingState({})
     setOpenCodeHandoff(null)
     setOpenCodeNote(null)
-    void Promise.all([
-      window.api.getChatHistory(prId),
-      window.api.getOpenCodeStatus(),
-      window.api.getOpenCodeHandoff(prId)
-    ]).then(([historyRes, statusRes, handoffRes]) => {
-      if (cancelled) return
-      if (historyRes.ok) setMessages(historyRes.data)
-      if (statusRes.ok) setOpenCodeStatus(statusRes.data)
-      if (handoffRes.ok) setOpenCodeHandoff(handoffRes.data)
-    })
+    void Promise.all([window.api.getChatHistory(prId), window.api.getOpenCodeStatus()]).then(
+      ([historyRes, statusRes]) => {
+        if (cancelled) return
+        if (historyRes.ok) setMessages(historyRes.data)
+        if (statusRes.ok) setOpenCodeStatus(statusRes.data)
+      }
+    )
     return () => {
       cancelled = true
     }
   }, [prId])
+
+  useEffect(() => {
+    if (historyRefreshNonce === 0) return
+    let cancelled = false
+    void window.api.getChatHistory(prId).then((res) => {
+      if (!cancelled && res.ok) setMessages(res.data)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [historyRefreshNonce, prId])
+
+  useEffect(() => {
+    let cancelled = false
+    setOpenCodeHandoff(null)
+    setOpenCodeNote(null)
+    if (activeFindingId == null) return
+    void window.api.getOpenCodeHandoffs(prId).then((res) => {
+      if (!cancelled && res.ok) {
+        setOpenCodeHandoff(
+          res.data.find((handoff) => handoff.findingId === activeFindingId) ?? null
+        )
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeFindingId, prId])
 
   // Keep the latest message in view (the page is the scroll container).
   useEffect(() => {
@@ -87,15 +124,31 @@ export function ChatTab({
     // assistant knows which change or finding we're asking about.
     const content = pinnedChange ? `${pinPrefix(pinnedChange)}\n\n${text}`.trim() : text
     // Optimistically show the user's message; the server persists on success.
-    setMessages((m) => [...m, { role: 'user', content }])
+    setMessages((messages) => [
+      ...messages,
+      {
+        role: 'user',
+        content,
+        findingId: activeFinding?.findingId,
+        findingPublicId: activeFinding?.publicId
+      }
+    ])
     setInput('')
-    onClearPinnedChange?.()
+    if (pinnedChange?.kind === 'change') onClearPinnedChange?.()
     setBusy(true)
     setError(null)
     try {
-      const res = await window.api.chatAboutPr(prId, content, model)
+      const res = await window.api.chatAboutPr(prId, content, model, activeFinding?.findingId)
       if (!res.ok) throw new Error(res.error)
-      setMessages((m) => [...m, { role: 'assistant', content: res.data }])
+      setMessages((messages) => [
+        ...messages,
+        {
+          role: 'assistant',
+          content: res.data,
+          findingId: activeFinding?.findingId,
+          findingPublicId: activeFinding?.publicId
+        }
+      ])
     } catch (e) {
       setError((e as Error).message)
       // The turn wasn't persisted, so roll back the optimistic message.
@@ -116,39 +169,42 @@ export function ChatTab({
   }
 
   async function startOpenCode(): Promise<void> {
-    if (openCodeBusy || busy) return
+    if (openCodeBusy || busy || !activeFinding) return
     setOpenCodeBusy(true)
     setOpenCodeNote(null)
     setError(null)
-    const res = await window.api.startOpenCodeHandoff(prId)
+    const res = await window.api.startOpenCodeForFinding(activeFinding.findingId)
     setOpenCodeBusy(false)
     if (res.ok) {
       setOpenCodeHandoff(res.data)
+      onOpenCodeChanged?.(res.data)
       setOpenCodeNote('Opened in Terminal')
     } else setError(res.error)
   }
 
   async function reopenOpenCode(): Promise<void> {
-    if (openCodeBusy || busy) return
+    if (openCodeBusy || busy || !activeFinding) return
     setOpenCodeBusy(true)
     setOpenCodeNote(null)
     setError(null)
-    const res = await window.api.reopenOpenCodeHandoff(prId)
+    const res = await window.api.reopenOpenCodeForFinding(activeFinding.findingId)
     setOpenCodeBusy(false)
     if (res.ok) {
       setOpenCodeHandoff(res.data)
+      onOpenCodeChanged?.(res.data)
       setOpenCodeNote('Reopened in Terminal')
     } else setError(res.error)
   }
 
   async function syncOpenCode(): Promise<void> {
-    if (openCodeBusy || busy) return
+    if (openCodeBusy || busy || !activeFinding) return
     setOpenCodeBusy(true)
     setOpenCodeNote(null)
     setError(null)
-    const res = await window.api.syncOpenCodeHandoff(prId)
+    const res = await window.api.syncOpenCodeForFinding(activeFinding.findingId)
     if (res.ok) {
       setOpenCodeHandoff(res.data.handoff)
+      onOpenCodeChanged?.(res.data.handoff)
       const history = await window.api.getChatHistory(prId)
       if (history.ok) setMessages(history.data)
       setOpenCodeNote(
@@ -194,18 +250,18 @@ export function ChatTab({
           <div className="opencode-handoff" title={openCodeHandoff.worktreePath}>
             <span className="dot on" />
             <span className="small">
-              OpenCode linked
+              OpenCode · {openCodeHandoff.findingPublicId} linked
               {openCodeHandoff.changedFiles.length > 0
                 ? ` · ${openCodeHandoff.changedFiles.length} changed file${openCodeHandoff.changedFiles.length === 1 ? '' : 's'}`
                 : ''}
             </span>
             {openCodeNote && <span className="muted small opencode-note">{openCodeNote}</span>}
             <button
-              className="btn subtle small-btn"
+              className="btn small-btn"
               onClick={() => void reopenOpenCode()}
               disabled={openCodeBusy || busy}
             >
-              Reopen
+              {openCodeBusy ? 'Opening…' : 'Reopen in Terminal'}
             </button>
             <button
               className="btn small-btn"
@@ -220,17 +276,27 @@ export function ChatTab({
             className="btn subtle small-btn"
             onClick={() => void startOpenCode()}
             disabled={
-              openCodeBusy || busy || !openCodeStatus?.available || !localCheckoutConfigured
+              openCodeBusy ||
+              busy ||
+              !activeFinding ||
+              !openCodeStatus?.available ||
+              !localCheckoutConfigured
             }
             title={
-              !openCodeStatus?.available
-                ? 'Configure OpenCode in Settings first'
-                : !localCheckoutConfigured
-                  ? 'Choose a local checkout for this repository in Settings first'
-                  : 'Continue this conversation in an isolated OpenCode worktree'
+              !activeFinding
+                ? 'Choose Chat about this finding from a finding card first'
+                : !openCodeStatus?.available
+                  ? 'Configure OpenCode in Settings first'
+                  : !localCheckoutConfigured
+                    ? 'Choose a local checkout for this repository in Settings first'
+                    : `Work on ${activeFinding.publicId} in an isolated OpenCode worktree`
             }
           >
-            {openCodeBusy ? 'Opening…' : 'Continue in OpenCode'}
+            {openCodeBusy
+              ? 'Opening…'
+              : activeFinding
+                ? `Open ${activeFinding.publicId} in OpenCode`
+                : 'Select a finding for OpenCode'}
           </button>
         )}
         <button
@@ -259,6 +325,15 @@ export function ChatTab({
                 : m.role === 'user'
                   ? 'You'
                   : 'Assistant'}
+              {m.findingId != null && m.findingPublicId && onOpenFinding && (
+                <button
+                  className="chat-finding-link"
+                  onClick={() => onOpenFinding(m.findingId as number)}
+                  title={`Back to finding ${m.findingPublicId}`}
+                >
+                  {m.findingPublicId}
+                </button>
+              )}
             </div>
             <div className="chat-bubble">
               {m.role === 'assistant' ? (

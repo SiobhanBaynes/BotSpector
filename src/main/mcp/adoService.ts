@@ -1012,6 +1012,23 @@ export async function replyToPullRequestThread(
   return true
 }
 
+export async function replyAndResolvePullRequestThread(
+  adoPrId: number,
+  threadId: number,
+  content: string
+): Promise<{ resolved: boolean; warning: string | null }> {
+  await replyToPullRequestThread(adoPrId, threadId, content)
+  try {
+    await setPullRequestThreadStatus(adoPrId, threadId, 'fixed')
+    return { resolved: true, warning: null }
+  } catch (error) {
+    return {
+      resolved: false,
+      warning: `The reply was posted, but the thread could not be resolved. Use the thread status selector to resolve it without posting the reply again. ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+}
+
 /**
  * Fetch the full PR description via the "get pull request" tool. The list tool
  * often omits the description, so we retrieve it on demand.

@@ -522,7 +522,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
         <div className="settings-section-heading">
           <div>
             <h2>OpenCode</h2>
-            <p className="muted">Optional external editing session</p>
+            <p className="muted">Optional finding-scoped Terminal work sessions</p>
           </div>
           <span className={openCodeStatus?.available ? 'badge on' : 'badge'}>
             {openCodeStatus?.available ? `Ready · v${openCodeStatus.version}` : 'Not configured'}

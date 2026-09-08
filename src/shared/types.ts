@@ -202,11 +202,18 @@ export interface ResolutionAssessment {
   explanation: string
 }
 
+export interface FindingThreadResolutionResult {
+  resolved: boolean
+  warning: string | null
+}
+
 // A single message in the per-PR chat conversation.
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   source?: 'botspector' | 'opencode'
+  findingId?: number
+  findingPublicId?: string
 }
 
 export interface OpenCodeStatus {
@@ -224,11 +231,16 @@ export interface OpenCodeChangedFile {
 }
 
 export interface OpenCodeHandoff {
+  findingId: number | null
+  findingPublicId: string | null
   sessionId: string
   worktreePath: string
   branchName: string
   baseCommit: string
+  lastPushedCommit: string | null
   changedFiles: OpenCodeChangedFile[]
+  fixAssessment: (ResolutionAssessment & { checkedAt: string }) | null
+  prAssessment: (ResolutionAssessment & { checkedAt: string; checkedCommit: string }) | null
   createdAt: string
   lastSyncedAt: string | null
 }
@@ -237,6 +249,21 @@ export interface OpenCodeSyncResult {
   handoff: OpenCodeHandoff
   importedMessages: number
   inProgress: boolean
+}
+
+export interface OpenCodeCommitPreview {
+  targetBranch: string
+  files: string[]
+  hasUncommittedChanges: boolean
+  commitsAhead: number
+  suggestedMessage: string
+  snapshotId: string
+}
+
+export interface OpenCodeCommitResult {
+  targetBranch: string
+  commit: string
+  createdCommit: boolean
 }
 
 // A named prompt profile that shapes the reviewer for a particular focus (e.g.

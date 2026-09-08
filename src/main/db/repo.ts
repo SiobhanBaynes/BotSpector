@@ -11,6 +11,7 @@ import type {
   OpenCodeHandoff,
   PostedComment,
   PullRequest,
+  ResolutionAssessment,
   RepositoryProfile,
   RepositoryProfileInput,
   Review,
@@ -1296,12 +1297,27 @@ const MAX_CHAT_MESSAGES = 200
 /** The persisted chat conversation for a PR, oldest first. */
 export function listChatMessages(prId: number): ChatMessage[] {
   const rows = getDb()
-    .prepare('SELECT role, content, source FROM chat_messages WHERE pr_id = ? ORDER BY id ASC')
-    .all(prId) as Array<{ role: string; content: string; source: string }>
-  return rows.map((r) => ({
-    role: r.role === 'assistant' ? 'assistant' : 'user',
-    content: r.content,
-    source: r.source === 'opencode' ? 'opencode' : 'botspector'
+    .prepare(
+      `SELECT m.role, m.content, m.source, m.finding_id, f.public_id AS finding_public_id
+       FROM chat_messages m
+       LEFT JOIN findings f ON f.id = m.finding_id
+       WHERE m.pr_id = ?
+       ORDER BY m.id ASC`
+    )
+    .all(prId) as Array<{
+    role: string
+    content: string
+    source: string
+    finding_id: number | null
+    finding_public_id: string | null
+  }>
+  return rows.map((row) => ({
+    role: row.role === 'assistant' ? 'assistant' : 'user',
+    content: row.content,
+    source: row.source === 'opencode' ? 'opencode' : 'botspector',
+    ...(row.finding_id != null
+      ? { findingId: row.finding_id, findingPublicId: row.finding_public_id ?? undefined }
+      : {})
   }))
 }
 
@@ -1311,9 +1327,11 @@ export function addChatMessages(prId: number, messages: ChatMessage[]): void {
   const db = getDb()
   const tx = db.transaction(() => {
     const insert = db.prepare(
-      'INSERT INTO chat_messages(pr_id, role, content, source) VALUES(?, ?, ?, ?)'
+      'INSERT INTO chat_messages(pr_id, role, content, source, finding_id) VALUES(?, ?, ?, ?, ?)'
     )
-    for (const m of messages) insert.run(prId, m.role, m.content, m.source ?? 'botspector')
+    for (const m of messages) {
+      insert.run(prId, m.role, m.content, m.source ?? 'botspector', m.findingId ?? null)
+    }
     // Keep only the most recent MAX_CHAT_MESSAGES rows for this PR.
     db.prepare(
       `DELETE FROM chat_messages
@@ -1333,13 +1351,24 @@ export function clearChatMessages(prId: number): void {
 // ---- OpenCode handoffs ----
 
 interface OpenCodeHandoffRow {
+  pr_id: number
+  finding_id: number | null
+  finding_public_id: string | null
   session_id: string
   worktree_path: string
   branch_name: string
   base_commit: string
+  last_pushed_commit: string | null
   seed_message_id: string | null
   last_synced_message_id: string | null
   changed_files_json: string
+  fix_verdict: string | null
+  fix_explanation: string | null
+  fix_checked_at: string | null
+  pr_verdict: string | null
+  pr_explanation: string | null
+  pr_checked_at: string | null
+  pr_checked_commit: string | null
   created_at: string
   last_synced_at: string | null
 }
@@ -1358,26 +1387,66 @@ function mapOpenCodeHandoff(row: OpenCodeHandoffRow): StoredOpenCodeHandoff {
     changedFiles = []
   }
   return {
+    findingId: row.finding_id,
+    findingPublicId: row.finding_public_id,
     sessionId: row.session_id,
     worktreePath: row.worktree_path,
     branchName: row.branch_name,
     baseCommit: row.base_commit,
+    lastPushedCommit: row.last_pushed_commit,
     seedMessageId: row.seed_message_id,
     lastSyncedMessageId: row.last_synced_message_id,
     changedFiles,
+    fixAssessment:
+      row.fix_verdict && row.fix_explanation && row.fix_checked_at
+        ? {
+            verdict:
+              row.fix_verdict === 'resolved' || row.fix_verdict === 'unresolved'
+                ? row.fix_verdict
+                : 'unclear',
+            explanation: row.fix_explanation,
+            checkedAt: row.fix_checked_at
+          }
+        : null,
+    prAssessment:
+      row.pr_verdict && row.pr_explanation && row.pr_checked_at && row.pr_checked_commit
+        ? {
+            verdict:
+              row.pr_verdict === 'resolved' || row.pr_verdict === 'unresolved'
+                ? row.pr_verdict
+                : 'unclear',
+            explanation: row.pr_explanation,
+            checkedAt: row.pr_checked_at,
+            checkedCommit: row.pr_checked_commit
+          }
+        : null,
     createdAt: row.created_at,
     lastSyncedAt: row.last_synced_at
   }
 }
 
-export function getOpenCodeHandoff(prId: number): StoredOpenCodeHandoff | null {
-  const row = getDb().prepare('SELECT * FROM opencode_handoffs WHERE pr_id = ?').get(prId) as
-    OpenCodeHandoffRow | undefined
+const OPEN_CODE_HANDOFF_SELECT = `
+  SELECT h.*, f.public_id AS finding_public_id
+  FROM opencode_handoffs h
+  LEFT JOIN findings f ON f.id = h.finding_id`
+
+export function getOpenCodeHandoffForFinding(findingId: number): StoredOpenCodeHandoff | null {
+  const row = getDb()
+    .prepare(`${OPEN_CODE_HANDOFF_SELECT} WHERE h.finding_id = ?`)
+    .get(findingId) as OpenCodeHandoffRow | undefined
   return row ? mapOpenCodeHandoff(row) : null
+}
+
+export function listOpenCodeHandoffs(prId: number): StoredOpenCodeHandoff[] {
+  const rows = getDb()
+    .prepare(`${OPEN_CODE_HANDOFF_SELECT} WHERE h.pr_id = ? ORDER BY h.created_at, h.id`)
+    .all(prId) as OpenCodeHandoffRow[]
+  return rows.map(mapOpenCodeHandoff)
 }
 
 export function createOpenCodeHandoff(
   prId: number,
+  findingId: number,
   input: {
     sessionId: string
     worktreePath: string
@@ -1386,15 +1455,19 @@ export function createOpenCodeHandoff(
     seedMessageId: string | null
   }
 ): StoredOpenCodeHandoff {
+  if (getPrIdForFinding(findingId) !== prId) {
+    throw new Error('The OpenCode finding does not belong to this pull request.')
+  }
   getDb()
     .prepare(
       `INSERT INTO opencode_handoffs
-         (pr_id, session_id, worktree_path, branch_name, base_commit, seed_message_id,
+        (pr_id, finding_id, session_id, worktree_path, branch_name, base_commit, seed_message_id,
           last_synced_message_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       prId,
+      findingId,
       input.sessionId,
       input.worktreePath,
       input.branchName,
@@ -1402,25 +1475,30 @@ export function createOpenCodeHandoff(
       input.seedMessageId,
       input.seedMessageId
     )
-  const handoff = getOpenCodeHandoff(prId)
+  const handoff = getOpenCodeHandoffForFinding(findingId)
   if (!handoff) throw new Error('Could not save the OpenCode handoff.')
   return handoff
 }
 
 export function applyOpenCodeSync(
-  prId: number,
+  findingId: number,
   messages: ChatMessage[],
   lastMessageId: string | null,
   changedFiles: OpenCodeChangedFile[]
 ): StoredOpenCodeHandoff {
   const db = getDb()
+  const existing = getOpenCodeHandoffForFinding(findingId)
+  if (!existing) throw new Error('OpenCode handoff not found.')
+  const prId = getPrIdForFinding(findingId)
+  if (prId == null) throw new Error('OpenCode finding not found.')
   db.transaction(() => {
     if (messages.length > 0) {
       const insert = db.prepare(
-        'INSERT INTO chat_messages(pr_id, role, content, source) VALUES(?, ?, ?, ?)'
+        `INSERT INTO chat_messages(pr_id, role, content, source, finding_id)
+         VALUES(?, ?, ?, ?, ?)`
       )
       for (const message of messages) {
-        insert.run(prId, message.role, message.content, 'opencode')
+        insert.run(prId, message.role, message.content, 'opencode', findingId)
       }
       db.prepare(
         `DELETE FROM chat_messages
@@ -1431,11 +1509,58 @@ export function applyOpenCodeSync(
     }
     db.prepare(
       `UPDATE opencode_handoffs
-       SET last_synced_message_id = ?, changed_files_json = ?, last_synced_at = datetime('now')
-       WHERE pr_id = ?`
-    ).run(lastMessageId, JSON.stringify(changedFiles), prId)
+      SET last_synced_message_id = ?, changed_files_json = ?, last_synced_at = datetime('now'),
+          fix_verdict = NULL, fix_explanation = NULL, fix_checked_at = NULL
+       WHERE finding_id = ?`
+    ).run(lastMessageId, JSON.stringify(changedFiles), findingId)
   })()
-  const handoff = getOpenCodeHandoff(prId)
+  const handoff = getOpenCodeHandoffForFinding(findingId)
+  if (!handoff) throw new Error('OpenCode handoff not found.')
+  return handoff
+}
+
+export function setOpenCodeFixAssessment(
+  findingId: number,
+  assessment: ResolutionAssessment
+): StoredOpenCodeHandoff {
+  getDb()
+    .prepare(
+      `UPDATE opencode_handoffs
+       SET fix_verdict = ?, fix_explanation = ?, fix_checked_at = datetime('now')
+       WHERE finding_id = ?`
+    )
+    .run(assessment.verdict, assessment.explanation, findingId)
+  const handoff = getOpenCodeHandoffForFinding(findingId)
+  if (!handoff) throw new Error('OpenCode handoff not found.')
+  return handoff
+}
+
+export function setOpenCodePrAssessment(
+  findingId: number,
+  assessment: ResolutionAssessment,
+  checkedCommit: string
+): StoredOpenCodeHandoff {
+  getDb()
+    .prepare(
+      `UPDATE opencode_handoffs
+       SET pr_verdict = ?, pr_explanation = ?, pr_checked_at = datetime('now'),
+           pr_checked_commit = ?
+       WHERE finding_id = ?`
+    )
+    .run(assessment.verdict, assessment.explanation, checkedCommit, findingId)
+  const handoff = getOpenCodeHandoffForFinding(findingId)
+  if (!handoff) throw new Error('OpenCode handoff not found.')
+  return handoff
+}
+
+export function setOpenCodeLastPushedCommit(
+  findingId: number,
+  commit: string
+): StoredOpenCodeHandoff {
+  getDb()
+    .prepare('UPDATE opencode_handoffs SET last_pushed_commit = ? WHERE finding_id = ?')
+    .run(commit, findingId)
+  const handoff = getOpenCodeHandoffForFinding(findingId)
   if (!handoff) throw new Error('OpenCode handoff not found.')
   return handoff
 }

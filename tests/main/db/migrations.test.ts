@@ -59,7 +59,7 @@ describe('runMigrations', () => {
   it('migrates a fresh database to the latest version', () => {
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(16)
+    expect(database.pragma('user_version', { simple: true })).toBe(18)
   })
 
   it('creates every application table', () => {
@@ -142,6 +142,7 @@ describe('runMigrations', () => {
       [
         'id',
         'pr_id',
+        'finding_id',
         'session_id',
         'worktree_path',
         'branch_name',
@@ -149,8 +150,16 @@ describe('runMigrations', () => {
         'seed_message_id',
         'last_synced_message_id',
         'changed_files_json',
+        'fix_verdict',
+        'fix_explanation',
+        'fix_checked_at',
+        'pr_verdict',
+        'pr_explanation',
+        'pr_checked_at',
+        'pr_checked_commit',
         'created_at',
-        'last_synced_at'
+        'last_synced_at',
+        'last_pushed_commit'
       ]
     ],
     [
@@ -201,7 +210,7 @@ describe('runMigrations', () => {
         'updated_at'
       ]
     ],
-    ['chat_messages', ['id', 'pr_id', 'role', 'content', 'created_at', 'source']]
+    ['chat_messages', ['id', 'pr_id', 'role', 'content', 'created_at', 'source', 'finding_id']]
   ])('creates the expected columns for %s', (table, expectedColumns) => {
     runMigrations(database)
 
@@ -212,8 +221,10 @@ describe('runMigrations', () => {
     runMigrations(database)
 
     expect(indexNames()).toEqual([
+      'idx_chat_messages_finding',
       'idx_chat_messages_pr',
       'idx_findings_review',
+      'idx_opencode_handoffs_finding',
       'idx_opencode_handoffs_pr',
       'idx_posted_comments_pr',
       'idx_repository_profiles_nickname_active',
@@ -229,7 +240,8 @@ describe('runMigrations', () => {
     ['comments', 'finding_id', 'findings', 'id'],
     ['posted_comments', 'pr_id', 'pull_requests', 'id'],
     ['chat_messages', 'pr_id', 'pull_requests', 'id'],
-    ['opencode_handoffs', 'pr_id', 'pull_requests', 'id']
+    ['opencode_handoffs', 'pr_id', 'pull_requests', 'id'],
+    ['opencode_handoffs', 'finding_id', 'findings', 'id']
   ])(
     'declares the %s.%s foreign key to %s.%s with cascade deletion',
     (table, from, targetTable, to) => {
@@ -247,6 +259,20 @@ describe('runMigrations', () => {
     }
   )
 
+  it('keeps finding tags on chat history when a finding is replaced', () => {
+    runMigrations(database)
+    const foreignKeys = database.pragma('foreign_key_list(chat_messages)') as ForeignKeyRow[]
+
+    expect(foreignKeys).toContainEqual(
+      expect.objectContaining({
+        from: 'finding_id',
+        table: 'findings',
+        to: 'id',
+        on_delete: 'SET NULL'
+      })
+    )
+  })
+
   it('is idempotent and preserves existing data', () => {
     runMigrations(database)
     database.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('theme', 'dark')
@@ -256,7 +282,7 @@ describe('runMigrations', () => {
     expect(database.prepare('SELECT value FROM settings WHERE key = ?').pluck().get('theme')).toBe(
       'dark'
     )
-    expect(database.pragma('user_version', { simple: true })).toBe(16)
+    expect(database.pragma('user_version', { simple: true })).toBe(18)
   })
 
   it('does not downgrade a database with a newer schema version', () => {
@@ -273,6 +299,70 @@ describe('runMigrations', () => {
 
     expect(() => runMigrations(database)).toThrow()
     expect(database.pragma('user_version', { simple: true })).toBe(7)
+  })
+
+  it('preserves legacy PR-wide OpenCode handoffs when upgrading version 16', () => {
+    database.exec(`
+      CREATE TABLE pull_requests (id INTEGER PRIMARY KEY);
+      CREATE TABLE findings (id INTEGER PRIMARY KEY);
+      CREATE TABLE chat_messages (
+        id INTEGER PRIMARY KEY,
+        pr_id INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        source TEXT NOT NULL DEFAULT 'botspector'
+      );
+      CREATE INDEX idx_chat_messages_pr ON chat_messages(pr_id, id);
+      CREATE TABLE opencode_handoffs (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id                  INTEGER NOT NULL UNIQUE REFERENCES pull_requests(id) ON DELETE CASCADE,
+        session_id             TEXT NOT NULL UNIQUE,
+        worktree_path          TEXT NOT NULL,
+        branch_name            TEXT NOT NULL,
+        base_commit            TEXT NOT NULL,
+        seed_message_id        TEXT,
+        last_synced_message_id TEXT,
+        changed_files_json     TEXT NOT NULL DEFAULT '[]',
+        created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+        last_synced_at         TEXT
+      );
+      CREATE INDEX idx_opencode_handoffs_pr ON opencode_handoffs(pr_id);
+
+      INSERT INTO pull_requests (id) VALUES (1);
+      INSERT INTO opencode_handoffs
+        (id, pr_id, session_id, worktree_path, branch_name, base_commit,
+         seed_message_id, last_synced_message_id, changed_files_json)
+      VALUES
+        (10, 1, 'legacy-session', '/tmp/legacy', 'botspector/pr-42', 'abcdef12',
+         'seed-1', 'reply-1', '[{"path":"src/main.ts","additions":2,"deletions":1}]');
+      PRAGMA user_version = 16;
+    `)
+
+    runMigrations(database)
+
+    expect(database.pragma('user_version', { simple: true })).toBe(18)
+    expect(database.prepare('SELECT * FROM opencode_handoffs WHERE id = 10').get()).toMatchObject({
+      pr_id: 1,
+      finding_id: null,
+      session_id: 'legacy-session',
+      worktree_path: '/tmp/legacy',
+      last_synced_message_id: 'reply-1',
+      changed_files_json: '[{"path":"src/main.ts","additions":2,"deletions":1}]',
+      fix_verdict: null,
+      pr_verdict: null,
+      last_pushed_commit: null
+    })
+    expect(columnNames('chat_messages')).toContain('finding_id')
+    expect(() =>
+      database
+        .prepare(
+          `INSERT INTO opencode_handoffs
+             (pr_id, session_id, worktree_path, branch_name, base_commit)
+           VALUES (1, 'another-session', '/tmp/another', 'botspector/pr-42-f-001', 'abcdef12')`
+        )
+        .run()
+    ).not.toThrow()
   })
 
   it('backfills posted comments and finding models when upgrading version 6', () => {
@@ -325,7 +415,7 @@ describe('runMigrations', () => {
 
     runMigrations(database)
 
-    expect(database.pragma('user_version', { simple: true })).toBe(16)
+    expect(database.pragma('user_version', { simple: true })).toBe(18)
     expect(database.prepare('SELECT * FROM posted_comments').get()).toMatchObject({
       pr_id: 1,
       ado_thread_id: 400,
@@ -408,7 +498,7 @@ describe('runMigrations', () => {
       profile.id
     )
     expect(database.prepare('SELECT pr_id FROM reviews WHERE id = 10').pluck().get()).toBe(1)
-    expect(database.pragma('user_version', { simple: true })).toBe(16)
+    expect(database.pragma('user_version', { simple: true })).toBe(18)
   })
 
   it('copies the legacy identity to every repository profile when upgrading version 14', () => {
@@ -426,6 +516,9 @@ describe('runMigrations', () => {
         created_at  TEXT NOT NULL DEFAULT (datetime('now')),
         archived_at TEXT
       );
+      CREATE TABLE pull_requests (
+        id INTEGER PRIMARY KEY
+      );
 
       INSERT INTO settings (key, value) VALUES ('myIdentity', 'Siobhan Legacy');
       INSERT INTO repository_profiles (id, nickname, ado_org, ado_project, ado_repo) VALUES
@@ -442,7 +535,7 @@ describe('runMigrations', () => {
       { id: 'api', my_identity: 'Siobhan Legacy' },
       { id: 'web', my_identity: 'Siobhan Legacy' }
     ])
-    expect(database.pragma('user_version', { simple: true })).toBe(16)
+    expect(database.pragma('user_version', { simple: true })).toBe(18)
   })
 
   it('backfills cached PRs when the configured repository is an ID instead of its name', () => {
