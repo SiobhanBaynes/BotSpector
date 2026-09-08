@@ -1,5 +1,5 @@
 import { execFile } from 'child_process'
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
@@ -12,7 +12,9 @@ import {
   getOpenCodeCommitPreview,
   messagesAfterOpenCodeAnchor,
   openCodeResolutionComment,
-  readOpenCodeWorktreeFiles
+  readOpenCodeWorktreeFiles,
+  validateRepositoryCheckout,
+  windowsOpenCodeLaunchArgs
 } from '../../src/main/opencode'
 
 const execFileAsync = promisify(execFile)
@@ -65,6 +67,58 @@ const pullRequest: PullRequest = {
 }
 
 describe('OpenCode handoff context', () => {
+  it('validates the complete Azure DevOps fetch and push destinations', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'botspector-opencode-remote-'))
+    try {
+      await git(root, ['init'])
+      await git(root, [
+        'remote',
+        'add',
+        'origin',
+        'https://contoso@dev.azure.com/contoso/Dillon%20Way/_git/BotSpector.git'
+      ])
+      const expected = { adoOrg: 'Contoso', adoProject: 'Dillon Way', adoRepo: 'botspector' }
+
+      await expect(validateRepositoryCheckout(root, expected)).resolves.toBe(await realpath(root))
+      await expect(
+        validateRepositoryCheckout(root, { ...expected, adoOrg: 'another-org' })
+      ).rejects.toThrow('fetch URL')
+      await expect(
+        validateRepositoryCheckout(root, { ...expected, adoProject: 'another-project' })
+      ).rejects.toThrow('fetch URL')
+
+      await git(root, [
+        'remote',
+        'set-url',
+        '--push',
+        'origin',
+        'git@ssh.dev.azure.com:v3/contoso/Dillon%20Way/another-repo'
+      ])
+      await expect(validateRepositoryCheckout(root, expected)).rejects.toThrow('push destination')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('builds a Windows START command for an executable outside PATH', () => {
+    expect(
+      windowsOpenCodeLaunchArgs(
+        'C:\\Program Files\\OpenCode\\opencode.exe',
+        'C:\\Worktrees\\PR 42',
+        'session-123'
+      )
+    ).toEqual([
+      '/d',
+      '/c',
+      'start',
+      '',
+      'C:\\Program Files\\OpenCode\\opencode.exe',
+      'C:\\Worktrees\\PR 42',
+      '--session',
+      'session-123'
+    ])
+  })
+
   it('seeds the PR, findings, comments, and recent conversation', () => {
     const seed = buildOpenCodeSeed({
       pullRequest,

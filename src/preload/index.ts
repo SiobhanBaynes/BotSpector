@@ -60,7 +60,9 @@ const api = {
     ipcRenderer.invoke(IPC.repositoryProfileSelect, profileId),
   deleteRepositoryProfile: (profileId: string): Promise<IpcResult<Settings>> =>
     ipcRenderer.invoke(IPC.repositoryProfileDelete, profileId),
-  chooseRepositoryCheckout: (repository: string): Promise<IpcResult<string | null>> =>
+  chooseRepositoryCheckout: (
+    repository: Pick<RepositoryProfileInput, 'adoOrg' | 'adoProject' | 'adoRepo'>
+  ): Promise<IpcResult<string | null>> =>
     ipcRenderer.invoke(IPC.repositoryChooseCheckout, repository),
   detectIdentity: (profileId: string): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IPC.detectIdentity, profileId),

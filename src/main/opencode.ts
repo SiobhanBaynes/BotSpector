@@ -14,7 +14,8 @@ import type {
   OpenCodeCommitResult,
   OpenCodeStatus,
   PostedComment,
-  PullRequest
+  PullRequest,
+  RepositoryProfile
 } from '../shared/types'
 import * as repo from './db/repo'
 
@@ -159,35 +160,119 @@ function openCodeCandidates(): string[] {
 
 export async function validateRepositoryCheckout(
   checkoutPath: string,
-  expectedRepository: string
+  expectedRepository: Pick<RepositoryProfile, 'adoOrg' | 'adoProject' | 'adoRepo'>
 ): Promise<string> {
   const root = (await runGit(checkoutPath, ['rev-parse', '--show-toplevel'])).trim()
-  let remote = ''
+  let fetchRemotes: string[]
+  let pushRemotes: string[]
   try {
-    remote = (await runGit(root, ['remote', 'get-url', 'origin'])).trim()
+    ;[fetchRemotes, pushRemotes] = await Promise.all([
+      readOriginUrls(root, false),
+      readOriginUrls(root, true)
+    ])
   } catch {
     throw new Error('The local checkout does not have an origin remote.')
   }
-  const remoteRepository = repositoryNameFromRemote(remote)
-  if (remoteRepository.toLocaleLowerCase() !== expectedRepository.toLocaleLowerCase()) {
-    throw new Error(
-      `The selected checkout is for "${remoteRepository}", not "${expectedRepository}".`
-    )
+  for (const remote of fetchRemotes) {
+    assertAzureDevOpsRemote(remote, expectedRepository, 'fetch URL')
+  }
+  for (const remote of pushRemotes) {
+    assertAzureDevOpsRemote(remote, expectedRepository, 'push destination')
   }
   return root
 }
 
-function repositoryNameFromRemote(remote: string): string {
-  const withoutSuffix = remote.replace(/[\\/]+$/, '').replace(/\.git$/i, '')
-  const name =
-    withoutSuffix
-      .split(/[\\/:]/)
-      .filter(Boolean)
-      .at(-1) ?? ''
+async function readOriginUrls(root: string, push: boolean): Promise<string[]> {
+  const output = await runGit(root, [
+    'remote',
+    'get-url',
+    ...(push ? ['--push'] : []),
+    '--all',
+    'origin'
+  ])
+  const urls = output
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+  if (urls.length === 0) throw new Error('Origin has no configured URL.')
+  return urls
+}
+
+function decodeRemotePart(value: string): string {
   try {
-    return decodeURIComponent(name)
+    return decodeURIComponent(value)
   } catch {
-    return name
+    return value
+  }
+}
+
+function azureDevOpsRepositoryFromRemote(
+  remote: string
+): Pick<RepositoryProfile, 'adoOrg' | 'adoProject' | 'adoRepo'> | null {
+  const scpMatch = remote
+    .trim()
+    .match(/^(?:[^@]+@)?ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)\/?$/i)
+  if (scpMatch) {
+    return {
+      adoOrg: decodeRemotePart(scpMatch[1]),
+      adoProject: decodeRemotePart(scpMatch[2]),
+      adoRepo: decodeRemotePart(scpMatch[3]).replace(/\.git$/i, '')
+    }
+  }
+
+  let url: URL
+  try {
+    url = new URL(remote.trim())
+  } catch {
+    return null
+  }
+  const host = url.hostname.toLocaleLowerCase()
+  const parts = url.pathname.split('/').filter(Boolean).map(decodeRemotePart)
+
+  if (url.protocol === 'ssh:' && host === 'ssh.dev.azure.com') {
+    if (parts.length !== 4 || parts[0].toLocaleLowerCase() !== 'v3') return null
+    return { adoOrg: parts[1], adoProject: parts[2], adoRepo: parts[3].replace(/\.git$/i, '') }
+  }
+  if (url.protocol !== 'https:') return null
+  if (host === 'dev.azure.com') {
+    if (parts.length !== 4 || parts[2].toLocaleLowerCase() !== '_git') return null
+    return { adoOrg: parts[0], adoProject: parts[1], adoRepo: parts[3].replace(/\.git$/i, '') }
+  }
+  if (host.endsWith('.visualstudio.com')) {
+    const org = decodeRemotePart(host.slice(0, -'.visualstudio.com'.length))
+    const offset = parts[0]?.toLocaleLowerCase() === 'defaultcollection' ? 1 : 0
+    if (parts.length !== offset + 3 || parts[offset + 1].toLocaleLowerCase() !== '_git') {
+      return null
+    }
+    return {
+      adoOrg: org,
+      adoProject: parts[offset],
+      adoRepo: parts[offset + 2].replace(/\.git$/i, '')
+    }
+  }
+  return null
+}
+
+function assertAzureDevOpsRemote(
+  remote: string,
+  expected: Pick<RepositoryProfile, 'adoOrg' | 'adoProject' | 'adoRepo'>,
+  label: string
+): void {
+  const actual = azureDevOpsRepositoryFromRemote(remote)
+  const expectedLabel = `${expected.adoOrg}/${expected.adoProject}/${expected.adoRepo}`
+  if (!actual) {
+    throw new Error(
+      `The selected checkout origin ${label} is not an Azure DevOps repository URL for "${expectedLabel}".`
+    )
+  }
+  const matches =
+    actual.adoOrg.toLocaleLowerCase() === expected.adoOrg.trim().toLocaleLowerCase() &&
+    actual.adoProject.toLocaleLowerCase() === expected.adoProject.trim().toLocaleLowerCase() &&
+    actual.adoRepo.toLocaleLowerCase() === expected.adoRepo.trim().toLocaleLowerCase()
+  if (!matches) {
+    throw new Error(
+      `The selected checkout origin ${label} is for "${actual.adoOrg}/${actual.adoProject}/${actual.adoRepo}", not "${expectedLabel}".`
+    )
   }
 }
 
@@ -316,11 +401,15 @@ export async function launchOpenCodeTui(
     return
   }
   if (process.platform === 'win32') {
-    const child = spawn('cmd.exe', ['/d', '/c', 'start', 'OpenCode', executablePath, ...args], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    })
+    const child = spawn(
+      'cmd.exe',
+      windowsOpenCodeLaunchArgs(executablePath, worktreePath, sessionId),
+      {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      }
+    )
     child.unref()
     return
   }
@@ -336,6 +425,14 @@ export async function launchOpenCodeTui(
     : ['-e', executablePath, ...args]
   const child = spawn(terminal, terminalArgs, { detached: true, stdio: 'ignore' })
   child.unref()
+}
+
+export function windowsOpenCodeLaunchArgs(
+  executablePath: string,
+  worktreePath: string,
+  sessionId: string
+): string[] {
+  return ['/d', '/c', 'start', '', executablePath, worktreePath, '--session', sessionId]
 }
 
 function posixQuote(value: string): string {

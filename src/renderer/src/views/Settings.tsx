@@ -315,13 +315,17 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   }
 
   async function chooseLocalCheckout(): Promise<void> {
-    if (!adoRepo.trim()) {
-      setError('Enter the Azure DevOps repository name before choosing a checkout.')
+    if (!adoOrg.trim() || !adoProject.trim() || !adoRepo.trim()) {
+      setError('Enter the Azure DevOps organization, project, and repository first.')
       return
     }
     setBusy(true)
     setError(null)
-    const res = await window.api.chooseRepositoryCheckout(adoRepo.trim())
+    const res = await window.api.chooseRepositoryCheckout({
+      adoOrg: adoOrg.trim(),
+      adoProject: adoProject.trim(),
+      adoRepo: adoRepo.trim()
+    })
     setBusy(false)
     if (res.ok) {
       if (res.data) setLocalCheckoutPath(res.data)

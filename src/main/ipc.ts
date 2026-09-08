@@ -187,7 +187,7 @@ async function ensureOpenCodeHandoff(
   if (!profile?.localCheckoutPath) {
     throw new Error('Choose a local checkout for this repository in Settings first.')
   }
-  const checkoutPath = await validateRepositoryCheckout(profile.localCheckoutPath, profile.adoRepo)
+  const checkoutPath = await validateRepositoryCheckout(profile.localCheckoutPath, profile)
   const context = await getPullRequestContext(pullRequest.adoPrId)
   const seed = buildOpenCodeSeed({
     pullRequest,
@@ -322,7 +322,7 @@ export function registerIpcHandlers(): void {
         if (pat) secrets.assertSecureStorageAvailable()
         const localCheckoutPath = input.localCheckoutPath?.trim()
         const normalizedCheckout = localCheckoutPath
-          ? await validateRepositoryCheckout(localCheckoutPath, input.adoRepo.trim())
+          ? await validateRepositoryCheckout(localCheckoutPath, input)
           : ''
         const saved = repo.saveRepositoryProfile(profileId, {
           ...input,
@@ -341,14 +341,17 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC.repositoryChooseCheckout,
-    async (_e, expectedRepository: string): Promise<IpcResult<string | null>> => {
+    async (
+      _e,
+      expectedRepository: Pick<RepositoryProfileInput, 'adoOrg' | 'adoProject' | 'adoRepo'>
+    ): Promise<IpcResult<string | null>> => {
       try {
         const result = await dialog.showOpenDialog({
           title: 'Choose local repository checkout',
           properties: ['openDirectory']
         })
         if (result.canceled || !result.filePaths[0]) return ok(null)
-        return ok(await validateRepositoryCheckout(result.filePaths[0], expectedRepository.trim()))
+        return ok(await validateRepositoryCheckout(result.filePaths[0], expectedRepository))
       } catch (e) {
         return fail(e)
       }
@@ -1749,6 +1752,10 @@ export function registerIpcHandlers(): void {
         const prId = repo.getPrIdForFinding(findingId)
         const pr = prId == null ? null : repo.getPullRequest(prId)
         if (!pr?.sourceBranch) throw new Error('The pull request source branch is unknown.')
+        const profile = repo.getCurrentRepositoryProfile()
+        if (!profile)
+          throw new Error('Could not find the repository profile for this pull request.')
+        await validateRepositoryCheckout(handoff.worktreePath, profile)
         const result = await commitOpenCodeToPullRequest(
           {
             worktreePath: handoff.worktreePath,
