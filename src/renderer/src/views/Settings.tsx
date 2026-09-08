@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type {
   CopilotModel,
   DeviceCodeInfo,
+  OpenCodeStatus,
   RepositoryProfileSummary,
   Settings,
   Skill
@@ -23,6 +24,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [adoOrg, setAdoOrg] = useState('')
   const [adoProject, setAdoProject] = useState('')
   const [adoRepo, setAdoRepo] = useState('')
+  const [localCheckoutPath, setLocalCheckoutPath] = useState('')
   const [pat, setPat] = useState('')
   const [model, setModel] = useState('')
   const [myIdentity, setMyIdentity] = useState('')
@@ -37,6 +39,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [instructions, setInstructions] = useState('')
   const [defaultInstructions, setDefaultInstructions] = useState('')
   const [instructionsUsingDefault, setInstructionsUsingDefault] = useState(true)
+  const [openCodeStatus, setOpenCodeStatus] = useState<OpenCodeStatus | null>(null)
 
   useEffect(() => {
     if (!settings) return
@@ -64,6 +67,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
   useEffect(() => {
     void loadSkills()
+    void loadOpenCodeStatus()
   }, [])
 
   useEffect(() => {
@@ -73,6 +77,47 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   async function loadSkills(): Promise<void> {
     const res = await window.api.listSkills()
     if (res.ok) setSkills(res.data)
+  }
+
+  async function loadOpenCodeStatus(): Promise<void> {
+    const res = await window.api.getOpenCodeStatus()
+    if (res.ok) setOpenCodeStatus(res.data)
+  }
+
+  async function detectOpenCode(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    const res = await window.api.detectOpenCode()
+    setBusy(false)
+    if (res.ok) {
+      setOpenCodeStatus(res.data)
+      if (res.data.available) setMessage(`OpenCode ${res.data.version} configured.`)
+      else setError(res.data.error)
+    } else setError(res.error)
+  }
+
+  async function chooseOpenCode(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    const res = await window.api.chooseOpenCode()
+    setBusy(false)
+    if (res.ok) {
+      setOpenCodeStatus(res.data)
+      if (res.data.available) setMessage(`OpenCode ${res.data.version} configured.`)
+    } else setError(res.error)
+  }
+
+  async function clearOpenCode(): Promise<void> {
+    setBusy(true)
+    const res = await window.api.clearOpenCode()
+    setBusy(false)
+    if (res.ok) {
+      setOpenCodeStatus(res.data)
+      setMessage('OpenCode disconnected.')
+      setError(null)
+    } else setError(res.error)
   }
 
   async function loadInstructions(skillId: string): Promise<void> {
@@ -172,6 +217,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setLocalCheckoutPath('')
     setMyIdentity('')
     setPat('')
   }
@@ -187,6 +233,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg(profile.adoOrg)
     setAdoProject(profile.adoProject)
     setAdoRepo(profile.adoRepo)
+    setLocalCheckoutPath(profile.localCheckoutPath)
     setMyIdentity(profile.myIdentity)
     setPat('')
     setMessage(null)
@@ -204,6 +251,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setLocalCheckoutPath('')
     setMyIdentity('')
     setPat('')
     setMessage(null)
@@ -220,6 +268,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       adoProject,
       adoRepo,
       myIdentity,
+      localCheckoutPath,
       ...(pat.trim() ? { pat: pat.trim() } : {})
     })
     setBusy(false)
@@ -262,6 +311,24 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     if (res.ok) {
       setMyIdentity(res.data)
       setMessage(`Detected ${res.data}. Save the repository profile to keep it.`)
+    } else setError(res.error)
+  }
+
+  async function chooseLocalCheckout(): Promise<void> {
+    if (!adoOrg.trim() || !adoProject.trim() || !adoRepo.trim()) {
+      setError('Enter the Azure DevOps organization, project, and repository first.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const res = await window.api.chooseRepositoryCheckout({
+      adoOrg: adoOrg.trim(),
+      adoProject: adoProject.trim(),
+      adoRepo: adoRepo.trim()
+    })
+    setBusy(false)
+    if (res.ok) {
+      if (res.data) setLocalCheckoutPath(res.data)
     } else setError(res.error)
   }
 
@@ -319,6 +386,20 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
               onChange={(event) => setAdoRepo(event.target.value)}
               placeholder="my-repo"
             />
+          </label>
+          <label className="repository-checkout-field">
+            Local checkout <span className="muted">(optional, required for OpenCode)</span>
+            <span className="path-picker">
+              <input
+                value={localCheckoutPath}
+                onChange={(event) => setLocalCheckoutPath(event.target.value)}
+                placeholder="Choose a local Git checkout"
+                spellCheck={false}
+              />
+              <button className="btn" type="button" onClick={chooseLocalCheckout} disabled={busy}>
+                Choose…
+              </button>
+            </span>
           </label>
           <label>
             Your identity
@@ -439,6 +520,38 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
             Sign in to GitHub Copilot
           </button>
         )}
+      </section>
+
+      <section className="card">
+        <div className="settings-section-heading">
+          <div>
+            <h2>OpenCode</h2>
+            <p className="muted">Optional finding-scoped Terminal work sessions</p>
+          </div>
+          <span className={openCodeStatus?.available ? 'badge on' : 'badge'}>
+            {openCodeStatus?.available ? `Ready · v${openCodeStatus.version}` : 'Not configured'}
+          </span>
+        </div>
+        {openCodeStatus?.executablePath && (
+          <div className="integration-path">
+            <span className="muted small">Executable</span>
+            <code>{openCodeStatus.executablePath}</code>
+          </div>
+        )}
+        {openCodeStatus?.error && <p className="integration-error small">{openCodeStatus.error}</p>}
+        <div className="row integration-actions">
+          <button className="btn" onClick={detectOpenCode} disabled={busy}>
+            Detect
+          </button>
+          <button className="btn" onClick={chooseOpenCode} disabled={busy}>
+            Choose executable…
+          </button>
+          {openCodeStatus?.configured && (
+            <button className="btn subtle" onClick={clearOpenCode} disabled={busy}>
+              Disconnect
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="card">
@@ -597,6 +710,9 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
                       <span>{profile.myIdentity || 'Identity not set'}</span>
                     </div>
                     <div className="repository-profile-actions">
+                      {profile.localCheckoutPath && (
+                        <span className="badge on">Checkout linked</span>
+                      )}
                       <span className={profile.hasAdoPat ? 'badge on' : 'badge'}>
                         {profile.hasAdoPat ? 'PAT saved' : 'PAT missing'}
                       </span>

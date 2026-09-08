@@ -129,6 +129,11 @@ export function App(): JSX.Element {
           <ReviewDetail
             prId={selectedPrId}
             defaultModel={settings?.model ?? ''}
+            localCheckoutConfigured={
+              !!settings.repositoryProfiles.find(
+                (profile) => profile.id === settings.activeRepositoryProfileId
+              )?.localCheckoutPath
+            }
             onBack={() => setSelectedPrId(null)}
           />
         )}

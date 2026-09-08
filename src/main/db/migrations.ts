@@ -295,6 +295,100 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
         ''
       )
     `)
+  },
+  // v16 -> optionally link repository profiles to a local checkout and retain
+  // the OpenCode session associated with a PR handoff.
+  (db) => {
+    db.exec(
+      `ALTER TABLE repository_profiles ADD COLUMN local_checkout_path TEXT NOT NULL DEFAULT ''`
+    )
+    const hasChatMessages = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_messages'")
+      .get()
+    if (hasChatMessages) {
+      db.exec(`ALTER TABLE chat_messages ADD COLUMN source TEXT NOT NULL DEFAULT 'botspector'`)
+    }
+    db.exec(`
+      CREATE TABLE opencode_handoffs (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id                  INTEGER NOT NULL UNIQUE REFERENCES pull_requests(id) ON DELETE CASCADE,
+        session_id             TEXT NOT NULL UNIQUE,
+        worktree_path          TEXT NOT NULL,
+        branch_name            TEXT NOT NULL,
+        base_commit            TEXT NOT NULL,
+        seed_message_id        TEXT,
+        last_synced_message_id TEXT,
+        changed_files_json     TEXT NOT NULL DEFAULT '[]',
+        created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+        last_synced_at         TEXT
+      );
+
+      CREATE INDEX idx_opencode_handoffs_pr ON opencode_handoffs(pr_id);
+    `)
+  },
+  // v17 -> scope OpenCode work sessions and their synced chat turns to a
+  // finding. Legacy PR-wide handoffs remain intact with a null finding id.
+  (db) => {
+    const hasFindings = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'findings'")
+      .get()
+    const findingReference = hasFindings ? 'REFERENCES findings(id) ON DELETE CASCADE' : ''
+    const hasChatMessages = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_messages'")
+      .get()
+    if (hasChatMessages) {
+      db.exec(`
+        ALTER TABLE chat_messages
+        ADD COLUMN finding_id INTEGER ${hasFindings ? 'REFERENCES findings(id) ON DELETE SET NULL' : ''};
+        CREATE INDEX idx_chat_messages_finding ON chat_messages(finding_id, id);
+      `)
+    }
+    db.exec(`
+      ALTER TABLE opencode_handoffs RENAME TO opencode_handoffs_v16;
+
+      CREATE TABLE opencode_handoffs (
+        id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+        pr_id                  INTEGER NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+        finding_id             INTEGER ${findingReference},
+        session_id             TEXT NOT NULL UNIQUE,
+        worktree_path          TEXT NOT NULL,
+        branch_name            TEXT NOT NULL,
+        base_commit            TEXT NOT NULL,
+        seed_message_id        TEXT,
+        last_synced_message_id TEXT,
+        changed_files_json     TEXT NOT NULL DEFAULT '[]',
+        fix_verdict            TEXT,
+        fix_explanation        TEXT,
+        fix_checked_at         TEXT,
+        pr_verdict             TEXT,
+        pr_explanation         TEXT,
+        pr_checked_at          TEXT,
+        pr_checked_commit      TEXT,
+        created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+        last_synced_at         TEXT
+      );
+
+      INSERT INTO opencode_handoffs
+        (id, pr_id, session_id, worktree_path, branch_name, base_commit,
+         seed_message_id, last_synced_message_id, changed_files_json,
+         created_at, last_synced_at)
+      SELECT id, pr_id, session_id, worktree_path, branch_name, base_commit,
+             seed_message_id, last_synced_message_id, changed_files_json,
+             created_at, last_synced_at
+      FROM opencode_handoffs_v16;
+
+      DROP TABLE opencode_handoffs_v16;
+
+      CREATE INDEX idx_opencode_handoffs_pr ON opencode_handoffs(pr_id);
+      CREATE UNIQUE INDEX idx_opencode_handoffs_finding
+      ON opencode_handoffs(finding_id)
+      WHERE finding_id IS NOT NULL;
+    `)
+  },
+  // v18 -> remember the last commit each OpenCode worktree successfully pushed
+  // so subsequent publishes include only newer work.
+  (db) => {
+    db.exec(`ALTER TABLE opencode_handoffs ADD COLUMN last_pushed_commit TEXT`)
   }
 ]
 
