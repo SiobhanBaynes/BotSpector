@@ -34,6 +34,11 @@ app.setPath(
 )
 
 function createWindow(): void {
+  const appIcon = join(
+    process.cwd(),
+    'build',
+    process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+  )
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 820,
@@ -42,6 +47,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'BotSpector',
+    ...(existsSync(appIcon) ? { icon: appIcon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

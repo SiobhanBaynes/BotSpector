@@ -20,7 +20,7 @@
       "category": "public.app-category.developer-tools"
     },
     "win": {
-      "icon": "build/icon.png"
+      "icon": "build/icon.ico"
     },
     "linux": {
       "icon": "build/icon.png",
