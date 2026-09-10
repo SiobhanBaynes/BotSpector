@@ -1,8 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type {
   CodeSnippet,
   Finding,
   FindingStatus,
+  OpenCodeCommitPreview,
+  OpenCodeHandoff,
   ResolutionAssessment
 } from '../../../shared/types'
 import { Markdown } from './Markdown'
@@ -13,6 +15,10 @@ interface Props {
   onChanged: () => Promise<void> | void
   onOpenInFiles?: (path: string, line: number | null) => void
   onChatAbout?: (finding: Finding) => void
+  openCodeHandoff?: OpenCodeHandoff | null
+  onOpenCodeChanged?: (handoff: OpenCodeHandoff, transcriptChanged?: boolean) => void
+  focusNonce?: number
+  currentHeadCommit?: string
 }
 
 const REFINEMENTS: Array<{ key: string; label: string; instruction: string }> = [
@@ -66,6 +72,10 @@ function threadStateClass(status: string | null): string {
   }
 }
 
+function threadIsTerminal(status: string | null): boolean {
+  return ['fixed', 'closed', 'wontfix', 'bydesign'].includes((status ?? '').toLowerCase())
+}
+
 // Azure DevOps comment-thread statuses we can set from the app.
 const THREAD_STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'active', label: 'Active' },
@@ -81,7 +91,11 @@ export function FindingCard({
   model,
   onChanged,
   onOpenInFiles,
-  onChatAbout
+  onChatAbout,
+  openCodeHandoff,
+  onOpenCodeChanged,
+  focusNonce,
+  currentHeadCommit
 }: Props): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -91,11 +105,63 @@ export function FindingCard({
   const [code, setCode] = useState<CodeSnippet | null>(null)
   const [showCode, setShowCode] = useState(false)
   const [resolution, setResolution] = useState<ResolutionAssessment | null>(null)
+  const [openCodeNote, setOpenCodeNote] = useState<string | null>(null)
+  const [commitPreview, setCommitPreview] = useState<OpenCodeCommitPreview | null>(null)
+  const [commitMessage, setCommitMessage] = useState('')
+  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState<boolean | null>(null)
+  const [checkingPublishState, setCheckingPublishState] = useState(false)
+  const [resolveCommentOpen, setResolveCommentOpen] = useState(false)
+  const [resolutionReply, setResolutionReply] = useState('')
+  const cardRef = useRef<HTMLDivElement>(null)
 
   // Keep the editable text in sync when the underlying draft changes.
   useEffect(() => {
     setCommentText(finding.comment?.draftText ?? '')
   }, [finding.comment?.draftText])
+
+  useEffect(() => {
+    if (focusNonce === undefined) return
+    setExpanded(true)
+    const frame = requestAnimationFrame(() => {
+      cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusNonce])
+
+  useEffect(() => {
+    if ((!commitPreview && !resolveCommentOpen) || busy !== null) return
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setCommitPreview(null)
+        setResolveCommentOpen(false)
+        setError(null)
+      }
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [busy, commitPreview, resolveCommentOpen])
+
+  useEffect(() => {
+    if (!expanded || !openCodeHandoff) return
+    let cancelled = false
+    const refresh = async (): Promise<void> => {
+      setCheckingPublishState(true)
+      try {
+        const res = await window.api.getOpenCodeCommitPreview(finding.id)
+        if (!cancelled) setHasUnpublishedChanges(res.ok ? res.data.files.length > 0 : true)
+      } catch {
+        if (!cancelled) setHasUnpublishedChanges(true)
+      } finally {
+        if (!cancelled) setCheckingPublishState(false)
+      }
+    }
+    void refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+    }
+  }, [expanded, finding.id, openCodeHandoff])
 
   async function withBusy(key: string, fn: () => Promise<void>): Promise<void> {
     setBusy(key)
@@ -197,6 +263,129 @@ export function FindingCard({
       const res = await window.api.checkFindingResolved(finding.id, model)
       if (!res.ok) throw new Error(res.error)
       setResolution(res.data)
+      await onChanged()
+    })
+  }
+
+  async function openCode(): Promise<void> {
+    await withBusy('opencode-open', async () => {
+      setOpenCodeNote(null)
+      const res = openCodeHandoff
+        ? await window.api.reopenOpenCodeForFinding(finding.id)
+        : await window.api.startOpenCodeForFinding(finding.id)
+      if (!res.ok) throw new Error(res.error)
+      onOpenCodeChanged?.(res.data)
+      setOpenCodeNote(openCodeHandoff ? 'Reopened in Terminal' : 'Opened in Terminal')
+    })
+  }
+
+  async function syncOpenCode(): Promise<void> {
+    await withBusy('opencode-sync', async () => {
+      setOpenCodeNote(null)
+      const res = await window.api.syncOpenCodeForFinding(finding.id)
+      if (!res.ok) throw new Error(res.error)
+      onOpenCodeChanged?.(res.data.handoff, true)
+      const publishPreview = await window.api.getOpenCodeCommitPreview(finding.id)
+      if (publishPreview.ok) setHasUnpublishedChanges(publishPreview.data.files.length > 0)
+      setOpenCodeNote(
+        res.data.inProgress
+          ? res.data.importedMessages > 0
+            ? `Synced ${res.data.importedMessages}; OpenCode is still working`
+            : 'OpenCode is still working'
+          : res.data.importedMessages > 0
+            ? `Synced ${res.data.importedMessages} message${res.data.importedMessages === 1 ? '' : 's'}`
+            : 'Up to date'
+      )
+    })
+  }
+
+  async function checkOpenCodeFix(): Promise<void> {
+    await withBusy('opencode-check', async () => {
+      const res = await window.api.checkOpenCodeFix(finding.id, model)
+      if (!res.ok) throw new Error(res.error)
+      onOpenCodeChanged?.(res.data)
+    })
+  }
+
+  async function previewOpenCodeCommit(): Promise<void> {
+    await withBusy('opencode-commit-preview', async () => {
+      setOpenCodeNote(null)
+      const res = await window.api.getOpenCodeCommitPreview(finding.id)
+      if (!res.ok) throw new Error(res.error)
+      setHasUnpublishedChanges(res.data.files.length > 0)
+      if (res.data.files.length === 0) {
+        setOpenCodeNote('No changes since the last push')
+        return
+      }
+      setCommitPreview(res.data)
+      setCommitMessage(res.data.hasUncommittedChanges ? res.data.suggestedMessage : '')
+    })
+  }
+
+  async function commitOpenCodeToPr(): Promise<void> {
+    if (!commitPreview) return
+    setBusy('opencode-commit')
+    setError(null)
+    try {
+      const res = await window.api.commitOpenCodeToPr(
+        finding.id,
+        commitMessage,
+        commitPreview.snapshotId
+      )
+      if (!res.ok) throw new Error(res.error)
+      setCommitPreview(null)
+      setHasUnpublishedChanges(false)
+      setOpenCodeNote(
+        `${res.data.createdCommit ? 'Committed and pushed' : 'Pushed'} ${res.data.commit.slice(0, 8)} to ${res.data.targetBranch}`
+      )
+      if (posted && !threadIsTerminal(finding.comment?.threadStatus ?? null)) {
+        const draft = await window.api.getOpenCodeResolutionComment(finding.id)
+        if (draft.ok) {
+          setResolutionReply(draft.data)
+          setResolveCommentOpen(true)
+        } else {
+          setError(
+            `The push succeeded, but the OpenCode comment could not be loaded. ${draft.error}`
+          )
+        }
+      }
+      await onChanged()
+    } catch (e) {
+      setError((e as Error).message)
+      const refreshed = await window.api.getOpenCodeCommitPreview(finding.id)
+      if (refreshed.ok) {
+        setHasUnpublishedChanges(refreshed.data.files.length > 0)
+        setCommitPreview(refreshed.data)
+        setCommitMessage(
+          refreshed.data.hasUncommittedChanges ? refreshed.data.suggestedMessage : ''
+        )
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function openResolveComment(): Promise<void> {
+    await withBusy('comment-draft', async () => {
+      const res = await window.api.getOpenCodeResolutionComment(finding.id)
+      if (!res.ok) throw new Error(res.error)
+      setResolutionReply(res.data)
+      setResolveCommentOpen(true)
+    })
+  }
+
+  async function commentAndResolve(): Promise<void> {
+    await withBusy('comment-resolve', async () => {
+      const res = await window.api.commentAndResolveFinding(finding.id, resolutionReply)
+      if (!res.ok) throw new Error(res.error)
+      setResolveCommentOpen(false)
+      setOpenCodeNote(
+        res.data.resolved
+          ? 'Comment posted and Azure DevOps thread resolved'
+          : 'Comment posted; Azure DevOps thread is still open'
+      )
+      if (res.data.warning) setError(res.data.warning)
+      await onChanged()
     })
   }
 
@@ -206,9 +395,30 @@ export function FindingCard({
     THREAD_STATUS_OPTIONS.find(
       (o) => o.value.toLowerCase() === (finding.comment?.threadStatus ?? 'active').toLowerCase()
     )?.value ?? 'active'
+  const fixVerdict = openCodeHandoff?.fixAssessment?.verdict
+  const fixLabel =
+    fixVerdict === 'resolved'
+      ? 'Fix ready'
+      : fixVerdict === 'unresolved'
+        ? 'Fix not ready'
+        : fixVerdict === 'unclear'
+          ? 'Fix unclear'
+          : 'OpenCode linked'
+  const prAssessment = openCodeHandoff?.prAssessment
+  const prAssessmentIsCurrent =
+    !!prAssessment && (!currentHeadCommit || prAssessment.checkedCommit === currentHeadCommit)
+  const prLabel = !prAssessment
+    ? null
+    : !prAssessmentIsCurrent
+      ? 'PR check stale'
+      : prAssessment.verdict === 'resolved'
+        ? 'Resolved on PR'
+        : prAssessment.verdict === 'unresolved'
+          ? 'Not resolved on PR'
+          : 'PR result unclear'
 
   return (
-    <div className={`finding status-${finding.status}`}>
+    <div ref={cardRef} className={`finding status-${finding.status}`}>
       <div className="finding-top" onClick={() => setExpanded((v) => !v)}>
         <span className="finding-id mono">{finding.publicId}</span>
         <span className="finding-title">{finding.title}</span>
@@ -225,6 +435,16 @@ export function FindingCard({
             +{finding.contributors.length}
           </span>
         )}
+        {openCodeHandoff && (
+          <span className={`opencode-finding-pill ${fixVerdict ?? 'linked'}`}>{fixLabel}</span>
+        )}
+        {prAssessment && (
+          <span
+            className={`opencode-finding-pill ${prAssessmentIsCurrent ? prAssessment.verdict : 'stale'}`}
+          >
+            {prLabel}
+          </span>
+        )}
         <span className={`status-pill ${finding.status}`}>{finding.status}</span>
         <button className="expander">{expanded ? '▾' : '▸'}</button>
       </div>
@@ -236,6 +456,264 @@ export function FindingCard({
             <div className="finding-loc mono small">
               {finding.filePath}
               {finding.line ? `:${finding.line}` : ''}
+            </div>
+          )}
+
+          {openCodeHandoff && (
+            <div className="finding-opencode">
+              <div className="finding-opencode-head">
+                <div>
+                  <strong>OpenCode work session</strong>
+                  <div className="muted small mono">{openCodeHandoff.branchName}</div>
+                </div>
+                <span className={`opencode-finding-pill ${fixVerdict ?? 'linked'}`}>
+                  {fixLabel}
+                </span>
+              </div>
+
+              {openCodeHandoff.changedFiles.length > 0 ? (
+                <ul className="opencode-files">
+                  {openCodeHandoff.changedFiles.map((file) => (
+                    <li key={file.path}>
+                      <span className="mono">{file.path}</span>
+                      <span className="opencode-file-stats">
+                        <span className="add">+{file.additions}</span>
+                        <span className="del">-{file.deletions}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="muted small">No changed files synced yet.</div>
+              )}
+
+              <div className="finding-opencode-actions">
+                <button className="btn small-btn" onClick={openCode} disabled={busy !== null}>
+                  {busy === 'opencode-open' ? 'Opening…' : 'Reopen in Terminal'}
+                </button>
+                <button className="btn small-btn" onClick={syncOpenCode} disabled={busy !== null}>
+                  {busy === 'opencode-sync' ? 'Syncing…' : 'Sync back'}
+                </button>
+                <button
+                  className="btn subtle small-btn"
+                  onClick={checkOpenCodeFix}
+                  disabled={busy !== null}
+                >
+                  {busy === 'opencode-check' ? 'Checking…' : 'Check worktree fix'}
+                </button>
+                <button
+                  className="btn primary small-btn"
+                  onClick={() => void previewOpenCodeCommit()}
+                  disabled={busy !== null || checkingPublishState || hasUnpublishedChanges !== true}
+                  title={
+                    hasUnpublishedChanges === false
+                      ? 'No worktree changes have been made since the last push'
+                      : undefined
+                  }
+                >
+                  {busy === 'opencode-commit-preview'
+                    ? 'Inspecting…'
+                    : checkingPublishState || hasUnpublishedChanges === null
+                      ? 'Checking changes…'
+                      : hasUnpublishedChanges
+                        ? 'Commit and push to PR'
+                        : 'Up to date'}
+                </button>
+                <button
+                  className="btn subtle small-btn"
+                  onClick={checkResolved}
+                  disabled={busy !== null}
+                >
+                  {busy === 'resolve' ? 'Checking…' : 'Check PR resolution'}
+                </button>
+                {posted && !threadIsTerminal(finding.comment?.threadStatus ?? null) && (
+                  <button
+                    className="btn small-btn"
+                    onClick={() => void openResolveComment()}
+                    disabled={busy !== null}
+                  >
+                    {busy === 'comment-draft' ? 'Loading comment…' : 'Comment and resolve'}
+                  </button>
+                )}
+                {openCodeNote && <span className="muted small">{openCodeNote}</span>}
+              </div>
+
+              {commitPreview && (
+                <>
+                  <div
+                    className="opencode-publish-scrim"
+                    onClick={() => {
+                      if (busy === null) {
+                        setCommitPreview(null)
+                        setError(null)
+                      }
+                    }}
+                  />
+                  <div
+                    className="opencode-publish-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={`opencode-publish-title-${finding.id}`}
+                  >
+                    <div className="opencode-publish-head">
+                      <strong id={`opencode-publish-title-${finding.id}`}>
+                        Commit and push {finding.publicId}
+                      </strong>
+                      <p className="muted small">
+                        Destination{' '}
+                        <span className="mono">origin/{commitPreview.targetBranch}</span>
+                      </p>
+                    </div>
+
+                    <div className="opencode-publish-summary small">
+                      {commitPreview.hasUncommittedChanges
+                        ? `The listed worktree changes will be committed, rebased onto the latest source branch, and pushed.${commitPreview.commitsAhead > 0 ? ` This also includes ${commitPreview.commitsAhead} existing ${commitPreview.commitsAhead === 1 ? 'commit' : 'commits'}.` : ''}`
+                        : `${commitPreview.commitsAhead} existing ${commitPreview.commitsAhead === 1 ? 'commit' : 'commits'} will be rebased onto the latest source branch and pushed.`}
+                    </div>
+
+                    <div className="opencode-publish-files" aria-label="Files to push">
+                      {commitPreview.files.map((path) => (
+                        <div key={path} className="mono small">
+                          {path}
+                        </div>
+                      ))}
+                    </div>
+
+                    {commitPreview.hasUncommittedChanges && (
+                      <label className="opencode-publish-field">
+                        <span className="muted small">Commit message</span>
+                        <input
+                          value={commitMessage}
+                          maxLength={200}
+                          autoFocus
+                          onChange={(event) => setCommitMessage(event.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    {error && <div className="banner err small">{error}</div>}
+
+                    <div className="opencode-publish-actions">
+                      <button
+                        className="btn subtle small-btn"
+                        onClick={() => {
+                          setCommitPreview(null)
+                          setError(null)
+                        }}
+                        disabled={busy !== null}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn primary small-btn"
+                        onClick={() => void commitOpenCodeToPr()}
+                        disabled={
+                          busy !== null ||
+                          (commitPreview.hasUncommittedChanges && !commitMessage.trim())
+                        }
+                      >
+                        {busy === 'opencode-commit'
+                          ? 'Sending…'
+                          : commitPreview.hasUncommittedChanges
+                            ? 'Commit and push'
+                            : 'Push to PR'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {resolveCommentOpen && (
+                <>
+                  <div
+                    className="opencode-publish-scrim"
+                    onClick={() => {
+                      if (busy === null) {
+                        setResolveCommentOpen(false)
+                        setError(null)
+                      }
+                    }}
+                  />
+                  <div
+                    className="opencode-publish-dialog opencode-resolve-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby={`opencode-resolve-title-${finding.id}`}
+                  >
+                    <div className="opencode-publish-head">
+                      <strong id={`opencode-resolve-title-${finding.id}`}>
+                        Comment and resolve {finding.publicId}
+                      </strong>
+                      <p className="muted small">
+                        This reply will be posted to the existing Azure DevOps thread before it is
+                        marked Resolved.
+                      </p>
+                    </div>
+
+                    <label className="opencode-publish-field">
+                      <span className="muted small">Reply</span>
+                      <input
+                        value={resolutionReply}
+                        maxLength={200}
+                        autoFocus
+                        onChange={(event) => setResolutionReply(event.target.value)}
+                      />
+                    </label>
+
+                    {error && <div className="banner err small">{error}</div>}
+
+                    <div className="opencode-publish-actions">
+                      <button
+                        className="btn subtle small-btn"
+                        onClick={() => {
+                          setResolveCommentOpen(false)
+                          setError(null)
+                        }}
+                        disabled={busy !== null}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="btn primary small-btn"
+                        onClick={() => void commentAndResolve()}
+                        disabled={busy !== null || !resolutionReply.trim()}
+                      >
+                        {busy === 'comment-resolve' ? 'Posting…' : 'Post reply and resolve'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {openCodeHandoff.fixAssessment && (
+                <div className={`resolution-result ${openCodeHandoff.fixAssessment.verdict}`}>
+                  <span className="resolution-verdict">
+                    {openCodeHandoff.fixAssessment.verdict === 'resolved'
+                      ? 'Fix ready in OpenCode'
+                      : openCodeHandoff.fixAssessment.verdict === 'unresolved'
+                        ? 'Fix not ready in OpenCode'
+                        : 'Worktree result unclear'}
+                  </span>
+                  <p className="resolution-explanation">
+                    {openCodeHandoff.fixAssessment.explanation}
+                  </p>
+                </div>
+              )}
+              {prAssessment && (
+                <div
+                  className={`resolution-result ${prAssessmentIsCurrent ? prAssessment.verdict : 'unclear'}`}
+                >
+                  <span className="resolution-verdict">{prLabel}</span>
+                  <p className="resolution-explanation">{prAssessment.explanation}</p>
+                  <div className="muted small mono">
+                    Checked {prAssessment.checkedCommit.slice(0, 8)}
+                  </div>
+                </div>
+              )}
+              <div className="muted small opencode-scope-note">
+                This checks only the isolated worktree. PR resolution is checked separately against
+                the source branch.
+              </div>
             </div>
           )}
 
@@ -342,23 +820,23 @@ export function FindingCard({
                     ))}
                   </div>
 
-                  {finding.comment.replyCount > 0 && (
+                  {finding.comment.replyCount > 0 && !openCodeHandoff && (
                     <div className="resolution-check">
                       <button
                         className="btn subtle small-btn"
                         onClick={checkResolved}
                         disabled={busy !== null}
-                        title="Ask the AI whether the reply and latest commit resolve this finding"
+                        title="Check whether the latest PR source branch resolves this finding"
                       >
-                        {busy === 'resolve' ? 'Checking…' : 'Check if resolved'}
+                        {busy === 'resolve' ? 'Checking…' : 'Check PR resolution'}
                       </button>
                       {resolution && (
                         <div className={`resolution-result ${resolution.verdict}`}>
                           <span className="resolution-verdict">
                             {resolution.verdict === 'resolved'
-                              ? '✓ Looks resolved'
+                              ? '✓ Resolved on PR'
                               : resolution.verdict === 'unresolved'
-                                ? '✕ Not resolved'
+                                ? '✕ Not resolved on PR'
                                 : '? Unclear'}
                           </span>
                           <p className="resolution-explanation">{resolution.explanation}</p>
@@ -444,6 +922,11 @@ export function FindingCard({
                 title="Ask the assistant about this finding"
               >
                 💬 Chat about this finding
+              </button>
+            )}
+            {!openCodeHandoff && (
+              <button className="btn" onClick={openCode} disabled={busy !== null}>
+                {busy === 'opencode-open' ? 'Opening…' : 'Open in OpenCode'}
               </button>
             )}
             <button className="btn" onClick={draft} disabled={busy !== null || posted}>

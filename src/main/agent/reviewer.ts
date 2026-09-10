@@ -107,25 +107,72 @@ function normalizeBucket(raw: string): (typeof FINDING_BUCKETS)[number] {
 // file-content tool.
 const EXCLUDED_TOOLS = [/pull_request_changes/i]
 
-// Tools that mutate Azure DevOps state. The reviewer must never call these, and
-// a skill's tool allowlist can never re-enable them. This is enforced here (not
-// just in the prompt) so an untrusted imported skill can't coerce a write.
-const WRITE_TOOLS = [
-  /create/i,
-  /update/i,
-  /delete/i,
-  /remove/i,
-  /_add|add_/i,
-  /vote/i,
-  /approve/i,
-  /reply/i,
-  /abandon/i,
-  /complete/i,
-  /\bmerge/i,
-  /assign/i,
-  /link/i,
-  /unlink/i
-]
+// The review agent gets only explicitly recognized read operations. A denylist
+// cannot safely keep pace with write aliases such as pipelines_run_pipeline.
+const READ_ONLY_REVIEW_TOOLS = new Set([
+  'repo_list_repos_by_project',
+  'repo_list_pull_requests_by_repo_or_project',
+  'repo_list_branches_by_repo',
+  'repo_list_my_branches_by_repo',
+  'repo_list_pull_request_threads',
+  'repo_list_pull_request_thread_comments',
+  'repo_get_repo_by_name_or_id',
+  'repo_get_branch_by_name',
+  'repo_get_pull_request_by_id',
+  'repo_get_pull_request_changes',
+  'repo_search_commits',
+  'repo_list_pull_requests_by_commits',
+  'repo_list_directory',
+  'repo_get_file_content',
+  'search_code',
+  'search_wiki',
+  'search_workitem',
+  'pipelines_get_builds',
+  'pipelines_get_build_changes',
+  'pipelines_get_build_definitions',
+  'pipelines_get_build_definition_revisions',
+  'pipelines_get_build_log',
+  'pipelines_get_build_log_by_id',
+  'pipelines_get_build_status',
+  'pipelines_get_run',
+  'pipelines_list_runs',
+  'pipelines_list_artifacts',
+  'core_list_project_teams',
+  'core_list_projects',
+  'core_get_identity_ids',
+  'work_list_team_iterations',
+  'work_list_iterations',
+  'work_get_team_capacity',
+  'work_get_iteration_capacities',
+  'work_get_team_settings',
+  'wit_my_work_items',
+  'wit_list_backlogs',
+  'wit_list_backlog_work_items',
+  'wit_get_work_item',
+  'wit_get_work_items_batch_by_ids',
+  'wit_list_work_item_comments',
+  'wit_list_work_item_revisions',
+  'wit_get_work_items_for_iteration',
+  'wit_get_work_item_type',
+  'wit_get_query',
+  'wit_get_query_results_by_id',
+  'wit_query_by_wiql',
+  'wiki_list_wikis',
+  'wiki_get_wiki',
+  'wiki_list_pages',
+  'wiki_get_page',
+  'wiki_get_page_content',
+  'advsec_get_alerts',
+  'advsec_get_alert_details',
+  'testplan_show_test_results_from_build_id',
+  'testplan_list_test_cases',
+  'testplan_list_test_plans',
+  'testplan_list_test_suites'
+])
+
+export function isReadOnlyReviewTool(name: string): boolean {
+  return READ_ONLY_REVIEW_TOOLS.has(name.toLowerCase())
+}
 
 // Compile a skill's tool allowlist (substring patterns, matched
 // case-insensitively) into regexes. Empty / undefined means "no extra filter".
@@ -143,9 +190,9 @@ async function mcpToolsAsDefinitions(toolAllowlist?: string[]): Promise<ToolDefi
   return (
     tools
       .filter((t) => !EXCLUDED_TOOLS.some((re) => re.test(t.name)))
-      // Hard denylist of write tools — applied unconditionally, before any
-      // skill allowlist, so read-only review is guaranteed.
-      .filter((t) => !WRITE_TOOLS.some((re) => re.test(t.name)))
+      // Applied before any skill allowlist, so imported instructions cannot
+      // expand the review agent beyond known read operations.
+      .filter((t) => isReadOnlyReviewTool(t.name))
       .filter((t) => (allow ? allow.some((re) => re.test(t.name)) : true))
       .map((t) => ({
         name: t.name,
@@ -631,7 +678,14 @@ export async function chatAboutPullRequest(
         `Current review findings:\n${findingsSummary || '(no review has been run yet)'}` +
         `${buildPriorCommentsBlock(priorComments)}`
     },
-    ...history.map((m) => ({ role: m.role, content: m.content }) as AgentMessage)
+    ...history.map(
+      (m) =>
+        ({
+          role: m.role,
+          content:
+            m.source === 'opencode' ? `[From the linked OpenCode session]\n${m.content}` : m.content
+        }) as AgentMessage
+    )
   ]
 
   let finalContent: string | null = null
@@ -764,14 +818,19 @@ export async function assessFindingResolution(
     commentText: string
     replies: CommentReply[]
     diffEvidence: string
+    evidenceKind?: 'pull-request' | 'worktree'
   },
   model: string
 ): Promise<ResolutionAssessment> {
-  const { finding, commentText, replies, diffEvidence } = input
+  const { finding, commentText, replies, diffEvidence, evidenceKind = 'pull-request' } = input
   const conversation = replies.length
     ? replies.map((r) => `${r.author}: ${r.text}`).join('\n\n')
     : '(no replies)'
   const hasEvidence = diffEvidence.trim().length > 0
+  const evidenceLabel =
+    evidenceKind === 'worktree'
+      ? 'isolated OpenCode worktree diffs (base commit → current worktree)'
+      : 'PR-wide changed-file diffs (base → head)'
   const result = await complete({
     model,
     temperature: 0.1,
@@ -779,8 +838,8 @@ export async function assessFindingResolution(
       {
         role: 'system',
         content:
-          'You judge whether a code-review finding has been resolved. The PR-wide changed-file ' +
-          'diffs (base → head) are the primary evidence: base your verdict on what the code ' +
+          `You judge whether a code-review finding has been addressed. The ${evidenceLabel} ` +
+          'are the primary evidence: base your verdict on what the code ' +
           'actually shows. Author replies are only weak hints — they cannot make a finding ' +
           '"resolved" on their own if the code does not show the fix.\n\n' +
           'Important:\n' +
@@ -810,7 +869,7 @@ export async function assessFindingResolution(
           `Finding [${finding.bucket}] ${finding.title}\n` +
           `${finding.description}\n` +
           `File: ${finding.filePath ?? 'n/a'}${finding.line ? ` (originally line ${finding.line})` : ''}\n\n` +
-          `PR-wide changed-file diffs base → head (primary evidence):\n` +
+          `${evidenceLabel} (primary evidence):\n` +
           `${hasEvidence ? diffEvidence : '(unavailable — prefer "unclear" unless the reply itself contradicts a fix)'}\n\n` +
           `Review comment we posted (context only):\n${commentText}\n\n` +
           `Author replies (hint only, do not rely on):\n${conversation}`
@@ -1005,7 +1064,8 @@ export async function draftComment(finding: Finding, model: string): Promise<str
         content:
           'You write pull-request review comments. Write a single, polite, constructive ' +
           'comment a reviewer could post directly. Keep jargon to a minimum. Do not include ' +
-          'a greeting or sign-off — just the comment body.'
+          'a greeting, sign-off, BotSpector tracking details, or internal finding identifiers ' +
+          'such as F-001 — just the comment body.'
       },
       {
         role: 'user',
@@ -1035,6 +1095,7 @@ export async function refineComment(
         content:
           'You revise a pull-request review comment. Apply the requested change while ' +
           'keeping the original meaning and any specifics (file names, identifiers). ' +
+          'Remove BotSpector tracking details and internal finding identifiers such as F-001. ' +
           'Return ONLY the revised comment body — no greeting, sign-off, quotes, or commentary.'
       },
       {

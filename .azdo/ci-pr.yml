@@ -104,20 +104,6 @@ jobs:
           failTaskOnFailedTests: true
           failTaskOnMissingResultsFile: true
 
-      - task: CopyFiles@2
-        displayName: Collect macOS installers
-        inputs:
-          SourceFolder: $(Build.SourcesDirectory)/dist
-          Contents: |
-            *.dmg
-            *.zip
-            *.blockmap
-          TargetFolder: $(Build.ArtifactStagingDirectory)/macos
-
-      - publish: $(Build.ArtifactStagingDirectory)/macos
-        displayName: Publish macOS installers
-        artifact: BotSpector-macOS
-
   - job: Package_Windows
     displayName: Package and smoke test Windows
     dependsOn: Validate
@@ -153,17 +139,3 @@ jobs:
           testRunTitle: BotSpector Windows package smoke
           failTaskOnFailedTests: true
           failTaskOnMissingResultsFile: true
-
-      - task: CopyFiles@2
-        displayName: Collect Windows installers
-        inputs:
-          SourceFolder: $(Build.SourcesDirectory)/dist
-          Contents: |
-            *.exe
-            *.zip
-            *.blockmap
-          TargetFolder: $(Build.ArtifactStagingDirectory)/windows
-
-      - publish: $(Build.ArtifactStagingDirectory)/windows
-        displayName: Publish Windows installers
-        artifact: BotSpector-Windows

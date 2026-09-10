@@ -4,6 +4,7 @@ import { PrList } from './views/PrList'
 import { ReviewDetail } from './views/ReviewDetail'
 import { SettingsView } from './views/Settings'
 import { useTheme } from './theme'
+import { BUILD_INFO, buildInfoTitle, compactBuildLabel } from './buildInfo'
 
 type Tab = 'prs' | 'settings'
 
@@ -89,6 +90,9 @@ export function App(): JSX.Element {
           <StatusDot label="Copilot" on={!!settings?.copilotConnected} />
           <StatusDot label="Repository PAT" on={!!settings?.hasAdoPat} />
           <div className="status-model">{settings?.model || 'No model selected'}</div>
+          <div className="build-version" title={buildInfoTitle(BUILD_INFO)}>
+            {compactBuildLabel(BUILD_INFO)}
+          </div>
         </div>
       </aside>
 
@@ -125,6 +129,11 @@ export function App(): JSX.Element {
           <ReviewDetail
             prId={selectedPrId}
             defaultModel={settings?.model ?? ''}
+            localCheckoutConfigured={
+              !!settings.repositoryProfiles.find(
+                (profile) => profile.id === settings.activeRepositoryProfileId
+              )?.localCheckoutPath
+            }
             onBack={() => setSelectedPrId(null)}
           />
         )}
