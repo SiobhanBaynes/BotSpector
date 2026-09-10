@@ -42,6 +42,7 @@ import { disconnect as disconnectAdoClients } from './mcp/adoClient'
 import {
   listPullRequests,
   fetchPullRequestDescription,
+  assertPullRequestUsesConfiguredRepository,
   fetchPullRequestSummary,
   fetchPullRequestHeadCommit,
   fetchPullRequestDiffRange,
@@ -187,6 +188,7 @@ async function ensureOpenCodeHandoff(
   if (!profile?.localCheckoutPath) {
     throw new Error('Choose a local checkout for this repository in Settings first.')
   }
+  await assertPullRequestUsesConfiguredRepository(pullRequest.adoPrId)
   const checkoutPath = await validateRepositoryCheckout(profile.localCheckoutPath, profile)
   const context = await getPullRequestContext(pullRequest.adoPrId)
   const seed = buildOpenCodeSeed({
@@ -381,15 +383,22 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(IPC.detectIdentity, async (_e, profileId: string): Promise<IpcResult<string>> => {
-    try {
-      const name = await repo.withRepositoryProfile(profileId, fetchCurrentUserDisplayName)
-      if (!name) throw new Error('Could not determine your Azure DevOps display name')
-      return ok(name)
-    } catch (e) {
-      return fail(e)
+  ipcMain.handle(
+    IPC.detectIdentity,
+    async (_e, profileId: string, organization: string): Promise<IpcResult<string>> => {
+      try {
+        const org = typeof organization === 'string' ? organization.trim() : ''
+        if (!org) throw new Error('Enter the Azure DevOps organization first')
+        const name = await repo.withRepositoryProfile(profileId, () =>
+          fetchCurrentUserDisplayName(org)
+        )
+        if (!name) throw new Error('Could not determine your Azure DevOps display name')
+        return ok(name)
+      } catch (e) {
+        return fail(e)
+      }
     }
-  })
+  )
 
   ipcMain.handle(IPC.openCodeStatus, async (): Promise<IpcResult<OpenCodeStatus>> => {
     try {

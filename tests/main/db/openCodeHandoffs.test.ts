@@ -13,6 +13,7 @@ vi.mock('../../../src/main/db/db', () => ({
 
 import {
   applyOpenCodeSync,
+  createReview,
   createOpenCodeHandoff,
   getOpenCodeHandoffForFinding,
   listOpenCodeHandoffs,
@@ -181,5 +182,41 @@ describe('OpenCode handoff persistence', () => {
       'F-001',
       'F-002'
     ])
+  })
+
+  it('preserves a linked finding and handoff across re-review', () => {
+    createOpenCodeHandoff(prId, findingId, {
+      sessionId: 'session-1',
+      worktreePath: '/tmp/worktree',
+      branchName: 'botspector/pr-42-f-001',
+      baseCommit: 'abcdef12',
+      seedMessageId: 'seed-1'
+    })
+
+    createReview(
+      prId,
+      'test-model',
+      [
+        {
+          publicId: 'F-002',
+          bucket: 'Medium',
+          title: 'A new finding',
+          description: 'Found on the next pass.',
+          filePath: 'src/new.ts',
+          line: 12
+        }
+      ],
+      '{"findings":[]}',
+      '12345678'
+    )
+
+    expect(getOpenCodeHandoffForFinding(findingId)).toMatchObject({
+      findingId,
+      findingPublicId: 'F-001',
+      sessionId: 'session-1'
+    })
+    expect(
+      database.prepare('SELECT public_id FROM findings WHERE id = ?').pluck().get(findingId)
+    ).toBe('F-001')
   })
 })

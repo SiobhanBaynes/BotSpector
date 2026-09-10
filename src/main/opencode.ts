@@ -211,7 +211,9 @@ function azureDevOpsRepositoryFromRemote(
 ): Pick<RepositoryProfile, 'adoOrg' | 'adoProject' | 'adoRepo'> | null {
   const scpMatch = remote
     .trim()
-    .match(/^(?:[^@]+@)?ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)\/?$/i)
+    .match(
+      /^(?:[^@]+@)?(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com):v3\/([^/]+)\/([^/]+)\/([^/]+?)\/?$/i
+    )
   if (scpMatch) {
     return {
       adoOrg: decodeRemotePart(scpMatch[1]),
@@ -229,7 +231,10 @@ function azureDevOpsRepositoryFromRemote(
   const host = url.hostname.toLocaleLowerCase()
   const parts = url.pathname.split('/').filter(Boolean).map(decodeRemotePart)
 
-  if (url.protocol === 'ssh:' && host === 'ssh.dev.azure.com') {
+  if (
+    url.protocol === 'ssh:' &&
+    (host === 'ssh.dev.azure.com' || host === 'vs-ssh.visualstudio.com')
+  ) {
     if (parts.length !== 4 || parts[0].toLocaleLowerCase() !== 'v3') return null
     return { adoOrg: parts[1], adoProject: parts[2], adoRepo: parts[3].replace(/\.git$/i, '') }
   }

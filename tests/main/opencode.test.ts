@@ -87,6 +87,11 @@ describe('OpenCode handoff context', () => {
         validateRepositoryCheckout(root, { ...expected, adoProject: 'another-project' })
       ).rejects.toThrow('fetch URL')
 
+      const legacyRemote = 'user@vs-ssh.visualstudio.com:v3/contoso/Dillon%20Way/BotSpector.git'
+      await git(root, ['remote', 'set-url', 'origin', legacyRemote])
+      await git(root, ['remote', 'set-url', '--push', 'origin', legacyRemote])
+      await expect(validateRepositoryCheckout(root, expected)).resolves.toBe(await realpath(root))
+
       await git(root, [
         'remote',
         'set-url',

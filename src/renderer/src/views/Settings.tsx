@@ -306,7 +306,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     if (!repositoryProfileId) return
     setBusy(true)
     setError(null)
-    const res = await window.api.detectIdentity(repositoryProfileId)
+    const res = await window.api.detectIdentity(repositoryProfileId, adoOrg)
     setBusy(false)
     if (res.ok) {
       setMyIdentity(res.data)

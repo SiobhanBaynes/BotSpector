@@ -692,7 +692,8 @@ export function createReview(
     if (existing) {
       reviewId = existing.id
       // Drop this review's transient findings, but keep any that have a posted
-      // comment so their source finding (and triage) survives the re-review.
+      // comment or OpenCode work session so their source finding, triage, and
+      // resumable work survive the re-review.
       db.prepare(
         `DELETE FROM findings
          WHERE review_id = @reviewId
@@ -700,6 +701,10 @@ export function createReview(
              SELECT c.finding_id FROM comments c
              WHERE c.finding_id IN (SELECT id FROM findings WHERE review_id = @reviewId)
                AND c.status = 'posted' AND c.ado_thread_id IS NOT NULL
+           )
+           AND id NOT IN (
+             SELECT h.finding_id FROM opencode_handoffs h
+             WHERE h.finding_id IS NOT NULL
            )`
       ).run({ reviewId })
       db.prepare(

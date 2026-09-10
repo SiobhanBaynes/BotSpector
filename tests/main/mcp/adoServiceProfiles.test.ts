@@ -27,6 +27,7 @@ vi.mock('../../../src/main/mcp/adoClient', () => ({
 
 import { callTool } from '../../../src/main/mcp/adoClient'
 import {
+  assertPullRequestUsesConfiguredRepository,
   fetchCurrentUserDisplayName,
   listPullRequests,
   replyAndResolvePullRequestThread
@@ -58,6 +59,44 @@ describe('Azure DevOps REST profile credentials', () => {
       `Basic ${Buffer.from(':pat-for-profile-a').toString('base64')}`,
       `Basic ${Buffer.from(':pat-for-profile-b').toString('base64')}`
     ])
+  })
+
+  it('detects identity from an edited organization with the current profile PAT', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ authenticatedUser: { customDisplayName: 'Reviewer' } })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchCurrentUserDisplayName(' edited-org ')).resolves.toBe('Reviewer')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://dev.azure.com/edited-org/_apis/connectionData?api-version=7.1-preview',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: `Basic ${Buffer.from(':pat-for-profile-a').toString('base64')}`
+        })
+      })
+    )
+  })
+
+  it('rejects a fork before OpenCode can publish to the configured repository', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          repository: { name: 'BotSpector', project: { name: 'BotSpector' } },
+          forkSource: {
+            repository: { name: 'BotSpector-fork', project: { name: 'Contributor' } }
+          }
+        })
+      }))
+    )
+
+    await expect(assertPullRequestUsesConfiguredRepository(42)).rejects.toThrow(
+      'This PR comes from "Contributor/BotSpector-fork", not "BotSpector/BotSpector".'
+    )
   })
 
   it('surfaces a profile PAT rejection without falling back to MCP', async () => {

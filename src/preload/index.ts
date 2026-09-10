@@ -64,8 +64,8 @@ const api = {
     repository: Pick<RepositoryProfileInput, 'adoOrg' | 'adoProject' | 'adoRepo'>
   ): Promise<IpcResult<string | null>> =>
     ipcRenderer.invoke(IPC.repositoryChooseCheckout, repository),
-  detectIdentity: (profileId: string): Promise<IpcResult<string>> =>
-    ipcRenderer.invoke(IPC.detectIdentity, profileId),
+  detectIdentity: (profileId: string, organization: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IPC.detectIdentity, profileId, organization),
   getOpenCodeStatus: (): Promise<IpcResult<OpenCodeStatus>> =>
     ipcRenderer.invoke(IPC.openCodeStatus),
   detectOpenCode: (): Promise<IpcResult<OpenCodeStatus>> => ipcRenderer.invoke(IPC.openCodeDetect),
