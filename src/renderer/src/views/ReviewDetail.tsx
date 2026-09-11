@@ -3,6 +3,7 @@ import type {
   CopilotModel,
   Finding,
   FindingStatus,
+  OpenCodeHandoff,
   PostedComment,
   PrAdoDetails,
   PinnedChange,
@@ -23,6 +24,7 @@ import { AdoCommentsTab } from './AdoCommentsTab'
 interface Props {
   prId: number
   defaultModel: string
+  localCheckoutConfigured: boolean
   onBack: () => void
 }
 
@@ -35,7 +37,12 @@ const REVIEW_DEPTH_KEY = 'botspector.reviewDepth'
 type StatusFilter = 'all' | FindingStatus
 type Tab = 'review' | 'files' | 'comments' | 'chat'
 
-export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element {
+export function ReviewDetail({
+  prId,
+  defaultModel,
+  localCheckoutConfigured,
+  onBack
+}: Props): JSX.Element {
   const [pr, setPr] = useState<PullRequest | null>(null)
   const [review, setReview] = useState<Review | null>(null)
   const [reviewHistory, setReviewHistory] = useState<ReviewSummary[]>([])
@@ -68,6 +75,9 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
   const [tab, setTab] = useState<Tab>('review')
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null)
   const [pinnedChange, setPinnedChange] = useState<PinnedChange | null>(null)
+  const [openCodeHandoffs, setOpenCodeHandoffs] = useState<OpenCodeHandoff[]>([])
+  const [chatHistoryRefreshNonce, setChatHistoryRefreshNonce] = useState(0)
+  const [findingFocus, setFindingFocus] = useState<{ id: number; nonce: number } | null>(null)
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false)
   const [dialogModels, setDialogModels] = useState<Set<string>>(() => {
     try {
@@ -105,16 +115,50 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
     setTab('chat')
   }, [])
 
+  const updateOpenCodeHandoff = useCallback(
+    (handoff: OpenCodeHandoff, transcriptChanged = false) => {
+      setOpenCodeHandoffs((handoffs) => [
+        ...handoffs.filter((current) => current.findingId !== handoff.findingId),
+        handoff
+      ])
+      if (transcriptChanged) setChatHistoryRefreshNonce((nonce) => nonce + 1)
+    },
+    []
+  )
+
+  const openFindingFromChat = useCallback(
+    (findingId: number) => {
+      const finding = review?.findings.find((candidate) => candidate.id === findingId)
+      if (finding) {
+        setPinnedChange({
+          kind: 'finding',
+          findingId: finding.id,
+          publicId: finding.publicId,
+          title: finding.title,
+          filePath: finding.filePath,
+          line: finding.line,
+          nonce: Date.now()
+        })
+      }
+      setFilter('all')
+      setTab('review')
+      setFindingFocus((current) => ({ id: findingId, nonce: (current?.nonce ?? 0) + 1 }))
+    },
+    [review]
+  )
+
   const load = useCallback(async () => {
-    const [prRes, reviewRes, postedRes, historyRes] = await Promise.all([
+    const [prRes, reviewRes, postedRes, historyRes, handoffsRes] = await Promise.all([
       window.api.getPullRequest(prId),
       window.api.getReview(prId),
       window.api.getPostedComments(prId),
-      window.api.getReviewHistory(prId)
+      window.api.getReviewHistory(prId),
+      window.api.getOpenCodeHandoffs(prId)
     ])
     if (prRes.ok) setPr(prRes.data)
     if (postedRes.ok) setPostedComments(postedRes.data)
     if (historyRes.ok) setReviewHistory(historyRes.data)
+    if (handoffsRes.ok) setOpenCodeHandoffs(handoffsRes.data)
     if (reviewRes.ok) {
       setReview(reviewRes.data)
       // If any comments were posted, refresh their thread status in the background.
@@ -613,9 +657,13 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
         <ChatTab
           prId={prId}
           model={defaultModel}
+          localCheckoutConfigured={localCheckoutConfigured}
           pinnedChange={pinnedChange}
           onClearPinnedChange={() => setPinnedChange(null)}
           onFindingCreated={load}
+          onOpenFinding={openFindingFromChat}
+          onOpenCodeChanged={updateOpenCodeHandoff}
+          historyRefreshNonce={chatHistoryRefreshNonce}
         />
       </div>
 
@@ -695,6 +743,12 @@ export function ReviewDetail({ prId, defaultModel, onBack }: Props): JSX.Element
                     onChanged={load}
                     onOpenInFiles={openInFiles}
                     onChatAbout={chatAboutFinding}
+                    openCodeHandoff={
+                      openCodeHandoffs.find((handoff) => handoff.findingId === f.id) ?? null
+                    }
+                    onOpenCodeChanged={updateOpenCodeHandoff}
+                    focusNonce={findingFocus?.id === f.id ? findingFocus.nonce : undefined}
+                    currentHeadCommit={pr?.headCommit}
                   />
                 ))}
               </section>

@@ -50,8 +50,10 @@ function webUrl(org: string, project: string, repo: string, prId: number): strin
  * Detect the authenticated user's display name from Azure DevOps connection
  * data (used to mark the current user's own PRs). Uses the PAT over REST.
  */
-export async function fetchCurrentUserDisplayName(): Promise<string | null> {
-  const org = getSetting('adoOrg')
+export async function fetchCurrentUserDisplayName(
+  organization = getSetting('adoOrg')
+): Promise<string | null> {
+  const org = organization.trim()
   const pat = currentAdoPat()
   if (!org || !pat) return null
 
@@ -249,6 +251,26 @@ async function fetchPullRequestRest(adoPrId: number): Promise<AnyRecord | null> 
   })
   if (!res.ok) throw new Error(`Could not load pull request (${res.status})`)
   return (await res.json()) as AnyRecord
+}
+
+export async function assertPullRequestUsesConfiguredRepository(adoPrId: number): Promise<void> {
+  const pullRequest = await fetchPullRequestRest(adoPrId)
+  if (!pullRequest) {
+    throw new Error('Could not verify the pull request source repository for OpenCode.')
+  }
+
+  const forkSource = (pullRequest.forkSource ?? {}) as AnyRecord
+  const sourceRepository = (forkSource.repository ?? {}) as AnyRecord
+  const sourceName = str(sourceRepository.name)
+  if (!sourceName) return
+
+  const sourceProject = (sourceRepository.project ?? {}) as AnyRecord
+  const sourceLabel = [str(sourceProject.name), sourceName].filter(Boolean).join('/')
+  const destinationLabel = `${getSetting('adoProject')}/${getSetting('adoRepo')}`
+  throw new Error(
+    `OpenCode cannot publish fixes for fork or cross-repository pull requests. ` +
+      `This PR comes from "${sourceLabel || sourceName}", not "${destinationLabel}".`
+  )
 }
 
 /** Add the current user as an optional (non-required) reviewer, if not already one. */
@@ -1010,6 +1032,23 @@ export async function replyToPullRequestThread(
     throw new Error(`Failed to post reply (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`)
   }
   return true
+}
+
+export async function replyAndResolvePullRequestThread(
+  adoPrId: number,
+  threadId: number,
+  content: string
+): Promise<{ resolved: boolean; warning: string | null }> {
+  await replyToPullRequestThread(adoPrId, threadId, content)
+  try {
+    await setPullRequestThreadStatus(adoPrId, threadId, 'fixed')
+    return { resolved: true, warning: null }
+  } catch (error) {
+    return {
+      resolved: false,
+      warning: `The reply was posted, but the thread could not be resolved. Use the thread status selector to resolve it without posting the reply again. ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
 }
 
 /**

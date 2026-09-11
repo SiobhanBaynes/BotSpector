@@ -7,7 +7,12 @@ export const IPC = {
   repositoryProfileSave: 'settings:repositoryProfileSave',
   repositoryProfileSelect: 'settings:repositoryProfileSelect',
   repositoryProfileDelete: 'settings:repositoryProfileDelete',
+  repositoryChooseCheckout: 'settings:repositoryChooseCheckout',
   detectIdentity: 'settings:detectIdentity',
+  openCodeStatus: 'settings:openCodeStatus',
+  openCodeDetect: 'settings:openCodeDetect',
+  openCodeChoose: 'settings:openCodeChoose',
+  openCodeClear: 'settings:openCodeClear',
 
   // Copilot auth
   copilotStartLogin: 'copilot:startLogin',
@@ -68,12 +73,21 @@ export const IPC = {
   findingUpdateComment: 'finding:updateComment',
   findingPostComment: 'finding:postComment',
   findingSetThreadStatus: 'finding:setThreadStatus',
+  findingCommentAndResolve: 'finding:commentAndResolve',
   findingCheckResolved: 'finding:checkResolved',
   findingCreateFromChat: 'finding:createFromChat',
   findingCreateFromAdoComment: 'finding:createFromAdoComment',
   prChat: 'pr:chat',
   prChatHistory: 'pr:chatHistory',
   prChatClear: 'pr:chatClear',
+  prOpenCodeHandoffs: 'pr:openCodeHandoffs',
+  findingOpenCodeStart: 'finding:openCodeStart',
+  findingOpenCodeReopen: 'finding:openCodeReopen',
+  findingOpenCodeSync: 'finding:openCodeSync',
+  findingOpenCodeCheckFix: 'finding:openCodeCheckFix',
+  findingOpenCodeResolutionComment: 'finding:openCodeResolutionComment',
+  findingOpenCodeCommitPreview: 'finding:openCodeCommitPreview',
+  findingOpenCodeCommit: 'finding:openCodeCommit',
 
   // Diagnostics
   logsOpen: 'logs:open'

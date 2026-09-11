@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import type {
   CopilotModel,
   DeviceCodeInfo,
+  OpenCodeStatus,
   RepositoryProfileSummary,
   Settings,
   Skill
 } from '../../../shared/types'
 import type { ThemePref } from '../theme'
+import { BUILD_INFO, formatBuildTimestamp } from '../buildInfo'
 
 interface Props {
   settings: Settings | null
@@ -22,6 +24,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [adoOrg, setAdoOrg] = useState('')
   const [adoProject, setAdoProject] = useState('')
   const [adoRepo, setAdoRepo] = useState('')
+  const [localCheckoutPath, setLocalCheckoutPath] = useState('')
   const [pat, setPat] = useState('')
   const [model, setModel] = useState('')
   const [myIdentity, setMyIdentity] = useState('')
@@ -36,11 +39,11 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [instructions, setInstructions] = useState('')
   const [defaultInstructions, setDefaultInstructions] = useState('')
   const [instructionsUsingDefault, setInstructionsUsingDefault] = useState(true)
+  const [openCodeStatus, setOpenCodeStatus] = useState<OpenCodeStatus | null>(null)
 
   useEffect(() => {
     if (!settings) return
     setModel(settings.model)
-    setMyIdentity(settings.myIdentity)
   }, [settings])
 
   useEffect(() => {
@@ -64,6 +67,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
 
   useEffect(() => {
     void loadSkills()
+    void loadOpenCodeStatus()
   }, [])
 
   useEffect(() => {
@@ -73,6 +77,47 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   async function loadSkills(): Promise<void> {
     const res = await window.api.listSkills()
     if (res.ok) setSkills(res.data)
+  }
+
+  async function loadOpenCodeStatus(): Promise<void> {
+    const res = await window.api.getOpenCodeStatus()
+    if (res.ok) setOpenCodeStatus(res.data)
+  }
+
+  async function detectOpenCode(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    const res = await window.api.detectOpenCode()
+    setBusy(false)
+    if (res.ok) {
+      setOpenCodeStatus(res.data)
+      if (res.data.available) setMessage(`OpenCode ${res.data.version} configured.`)
+      else setError(res.data.error)
+    } else setError(res.error)
+  }
+
+  async function chooseOpenCode(): Promise<void> {
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    const res = await window.api.chooseOpenCode()
+    setBusy(false)
+    if (res.ok) {
+      setOpenCodeStatus(res.data)
+      if (res.data.available) setMessage(`OpenCode ${res.data.version} configured.`)
+    } else setError(res.error)
+  }
+
+  async function clearOpenCode(): Promise<void> {
+    setBusy(true)
+    const res = await window.api.clearOpenCode()
+    setBusy(false)
+    if (res.ok) {
+      setOpenCodeStatus(res.data)
+      setMessage('OpenCode disconnected.')
+      setError(null)
+    } else setError(res.error)
   }
 
   async function loadInstructions(skillId: string): Promise<void> {
@@ -172,6 +217,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setLocalCheckoutPath('')
+    setMyIdentity('')
     setPat('')
   }
 
@@ -186,6 +233,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg(profile.adoOrg)
     setAdoProject(profile.adoProject)
     setAdoRepo(profile.adoRepo)
+    setLocalCheckoutPath(profile.localCheckoutPath)
+    setMyIdentity(profile.myIdentity)
     setPat('')
     setMessage(null)
     setError(null)
@@ -202,6 +251,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setAdoOrg('')
     setAdoProject('')
     setAdoRepo('')
+    setLocalCheckoutPath('')
+    setMyIdentity('')
     setPat('')
     setMessage(null)
     setError(null)
@@ -216,6 +267,8 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       adoOrg,
       adoProject,
       adoRepo,
+      myIdentity,
+      localCheckoutPath,
       ...(pat.trim() ? { pat: pat.trim() } : {})
     })
     setBusy(false)
@@ -249,23 +302,33 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     else setError(res.error)
   }
 
-  async function saveIdentity(): Promise<void> {
-    const res = await window.api.saveSettings({ myIdentity })
-    if (res.ok) {
-      setMessage('Saved your identity.')
-      await onChange()
-    } else setError(res.error)
-  }
-
   async function detectIdentity(): Promise<void> {
+    if (!repositoryProfileId) return
     setBusy(true)
     setError(null)
-    const res = await window.api.detectIdentity()
+    const res = await window.api.detectIdentity(repositoryProfileId, adoOrg)
     setBusy(false)
     if (res.ok) {
       setMyIdentity(res.data)
-      setMessage(`Detected: ${res.data}`)
-      await onChange()
+      setMessage(`Detected ${res.data}. Save the repository profile to keep it.`)
+    } else setError(res.error)
+  }
+
+  async function chooseLocalCheckout(): Promise<void> {
+    if (!adoOrg.trim() || !adoProject.trim() || !adoRepo.trim()) {
+      setError('Enter the Azure DevOps organization, project, and repository first.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const res = await window.api.chooseRepositoryCheckout({
+      adoOrg: adoOrg.trim(),
+      adoProject: adoProject.trim(),
+      adoRepo: adoRepo.trim()
+    })
+    setBusy(false)
+    if (res.ok) {
+      if (res.data) setLocalCheckoutPath(res.data)
     } else setError(res.error)
   }
 
@@ -324,6 +387,35 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
               placeholder="my-repo"
             />
           </label>
+          <label className="repository-checkout-field">
+            Local checkout <span className="muted">(optional, required for OpenCode)</span>
+            <span className="path-picker">
+              <input
+                value={localCheckoutPath}
+                onChange={(event) => setLocalCheckoutPath(event.target.value)}
+                placeholder="Choose a local Git checkout"
+                spellCheck={false}
+              />
+              <button className="btn" type="button" onClick={chooseLocalCheckout} disabled={busy}>
+                Choose…
+              </button>
+            </span>
+          </label>
+          <label>
+            Your identity
+            <input
+              value={myIdentity}
+              onChange={(event) => setMyIdentity(event.target.value)}
+              placeholder="e.g. Siobhan B"
+            />
+          </label>
+          <button
+            className="btn repository-detect-identity"
+            onClick={detectIdentity}
+            disabled={busy || repositoryEditorMode !== 'edit' || !hasStoredPat}
+          >
+            Detect from Azure DevOps
+          </button>
           <label className="repository-pat-field">
             Personal Access Token
             <input
@@ -339,9 +431,10 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
           </label>
         </div>
         <p className="muted small">
-          The PAT is encrypted and stored only for this repository profile. Leave it blank when
-          editing to keep the stored PAT. Repository details become fixed after pull requests are
-          stored, keeping review history attached to the right repository.
+          Identity marks and filters your pull requests for this profile. The PAT is encrypted and
+          stored only for this repository profile; leave it blank when editing to keep the stored
+          PAT. Repository details become fixed after pull requests are stored, keeping review
+          history attached to the right repository.
         </p>
         <div className="row repository-profile-editor-actions">
           <button
@@ -427,6 +520,38 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
             Sign in to GitHub Copilot
           </button>
         )}
+      </section>
+
+      <section className="card">
+        <div className="settings-section-heading">
+          <div>
+            <h2>OpenCode</h2>
+            <p className="muted">Optional finding-scoped Terminal work sessions</p>
+          </div>
+          <span className={openCodeStatus?.available ? 'badge on' : 'badge'}>
+            {openCodeStatus?.available ? `Ready · v${openCodeStatus.version}` : 'Not configured'}
+          </span>
+        </div>
+        {openCodeStatus?.executablePath && (
+          <div className="integration-path">
+            <span className="muted small">Executable</span>
+            <code>{openCodeStatus.executablePath}</code>
+          </div>
+        )}
+        {openCodeStatus?.error && <p className="integration-error small">{openCodeStatus.error}</p>}
+        <div className="row integration-actions">
+          <button className="btn" onClick={detectOpenCode} disabled={busy}>
+            Detect
+          </button>
+          <button className="btn" onClick={chooseOpenCode} disabled={busy}>
+            Choose executable…
+          </button>
+          {openCodeStatus?.configured && (
+            <button className="btn subtle" onClick={clearOpenCode} disabled={busy}>
+              Disconnect
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="card">
@@ -582,8 +707,12 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
                       <span>
                         {profile.adoOrg} / {profile.adoProject} / {profile.adoRepo}
                       </span>
+                      <span>{profile.myIdentity || 'Identity not set'}</span>
                     </div>
                     <div className="repository-profile-actions">
+                      {profile.localCheckoutPath && (
+                        <span className="badge on">Checkout linked</span>
+                      )}
                       <span className={profile.hasAdoPat ? 'badge on' : 'badge'}>
                         {profile.hasAdoPat ? 'PAT saved' : 'PAT missing'}
                       </span>
@@ -626,32 +755,26 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       </section>
 
       <section className="card">
-        <h2>Your identity</h2>
-        <p className="muted">
-          Used to mark and filter your own pull requests. Detect it from Azure DevOps or type your
-          display name.
-        </p>
-        <label>
-          Your name
-          <input
-            value={myIdentity}
-            onChange={(e) => setMyIdentity(e.target.value)}
-            placeholder="e.g. Siobhan B"
-          />
-        </label>
-        <div className="row">
-          <button className="btn primary" onClick={saveIdentity} disabled={busy}>
-            Save
-          </button>
-          <button className="btn" onClick={detectIdentity} disabled={busy || !settings?.hasAdoPat}>
-            Detect from Azure DevOps
-          </button>
-        </div>
-      </section>
-
-      <section className="card">
         <h2>Diagnostics</h2>
-        <p className="muted">Open the log file to see review activity and errors.</p>
+        <p className="muted">Build details identify the exact app bundle when reporting issues.</p>
+        <dl className="build-details" aria-label="Build information">
+          <dt>Version</dt>
+          <dd>v{BUILD_INFO.version}</dd>
+          <dt>Build</dt>
+          <dd>
+            {BUILD_INFO.buildNumber}
+            {BUILD_INFO.buildId ? ` (#${BUILD_INFO.buildId})` : ''}
+          </dd>
+          <dt>Commit</dt>
+          <dd>
+            <code>{BUILD_INFO.commit}</code>
+            {BUILD_INFO.dirty ? ' (dirty working tree)' : ''}
+          </dd>
+          <dt>Built</dt>
+          <dd>
+            <time dateTime={BUILD_INFO.builtAt}>{formatBuildTimestamp(BUILD_INFO.builtAt)}</time>
+          </dd>
+        </dl>
         <button className="btn" onClick={() => window.api.openLogs()}>
           Open logs
         </button>
