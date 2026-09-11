@@ -6,6 +6,7 @@ import { getDb, closeDb } from './db/db'
 import { resetStuckReviews, recomputeAllReviewStatuses } from './db/repo'
 import { disconnect as disconnectMcp } from './mcp/adoClient'
 import { fixEnvPath } from './fixPath'
+import { resolveAppIconPath } from './appIcon'
 
 // A GUI app launched from Finder/Dock gets a minimal PATH that omits Node
 // managers (nvm/fnm/Homebrew), which breaks spawning `npx` for the MCP server.
@@ -34,6 +35,12 @@ app.setPath(
 )
 
 function createWindow(): void {
+  const appIcon = resolveAppIconPath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    cwd: process.cwd(),
+    platform: process.platform
+  })
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 820,
@@ -42,6 +49,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     title: 'BotSpector',
+    ...(existsSync(appIcon) ? { icon: appIcon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
