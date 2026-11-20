@@ -56,8 +56,11 @@ version is always visible in the sidebar, with complete details under **Settings
 5. Go to **Pull requests**, Refresh, open a PR, and click **Review this PR**.
 
 Add more repository profiles in **Settings**, then switch the active repository from the sidebar.
-Each profile keeps its identity, PAT, pull requests, and review history separate. A project-scoped
-PAT can be entered for each repository profile in that project.
+Each profile keeps its identity, PAT, pull requests, and review history separate. When adding a
+repository, choose **Reuse PAT from** to copy a saved PAT from another profile, or enter a new PAT.
+Only profiles with a saved PAT are offered. The copy is encrypted separately when you save;
+changing or removing the original profile does not change the new profile's PAT. Ensure the
+reused PAT grants access to the new repository.
 
 ## Notes
 

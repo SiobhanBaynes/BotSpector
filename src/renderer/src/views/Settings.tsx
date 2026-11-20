@@ -26,6 +26,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
   const [adoRepo, setAdoRepo] = useState('')
   const [localCheckoutPath, setLocalCheckoutPath] = useState('')
   const [pat, setPat] = useState('')
+  const [patSourceProfileId, setPatSourceProfileId] = useState('')
   const [model, setModel] = useState('')
   const [myIdentity, setMyIdentity] = useState('')
   const [models, setModels] = useState<CopilotModel[]>([])
@@ -220,6 +221,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setLocalCheckoutPath('')
     setMyIdentity('')
     setPat('')
+    setPatSourceProfileId('')
   }
 
   function editRepositoryProfile(profile: RepositoryProfileSummary): void {
@@ -236,6 +238,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setLocalCheckoutPath(profile.localCheckoutPath)
     setMyIdentity(profile.myIdentity)
     setPat('')
+    setPatSourceProfileId('')
     setMessage(null)
     setError(null)
   }
@@ -254,6 +257,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     setLocalCheckoutPath('')
     setMyIdentity('')
     setPat('')
+    setPatSourceProfileId('')
     setMessage(null)
     setError(null)
   }
@@ -269,6 +273,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
       adoRepo,
       myIdentity,
       localCheckoutPath,
+      ...(patSourceProfileId ? { patSourceProfileId } : {}),
       ...(pat.trim() ? { pat: pat.trim() } : {})
     })
     setBusy(false)
@@ -350,6 +355,7 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
     const hasStoredPat = settings?.repositoryProfiles.find(
       (profile) => profile.id === repositoryProfileId
     )?.hasAdoPat
+    const patSources = settings?.repositoryProfiles.filter((profile) => profile.hasAdoPat) ?? []
 
     return (
       <div className="repository-profile-editor" id={editorId}>
@@ -416,25 +422,50 @@ export function SettingsView({ settings, onChange, theme, onThemeChange }: Props
           >
             Detect from Azure DevOps
           </button>
+          {repositoryEditorMode === 'add' && patSources.length > 0 && (
+            <label className="repository-pat-field">
+              Reuse PAT from
+              <select
+                value={patSourceProfileId}
+                onChange={(event) => {
+                  setPatSourceProfileId(event.target.value)
+                  setPat('')
+                }}
+                disabled={busy}
+              >
+                <option value="">Enter a new PAT</option>
+                {patSources.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.nickname} ({profile.adoOrg}/{profile.adoProject}/{profile.adoRepo})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="repository-pat-field">
             Personal Access Token
             <input
               type="password"
               value={pat}
               onChange={(event) => setPat(event.target.value)}
+              disabled={!!patSourceProfileId}
               placeholder={
-                repositoryEditorMode === 'edit' && hasStoredPat
-                  ? 'Stored securely; enter a new PAT to replace it'
-                  : 'Paste PAT (Code: Read; Pull Request: Read)'
+                patSourceProfileId
+                  ? 'The selected PAT will be copied securely when you save'
+                  : repositoryEditorMode === 'edit' && hasStoredPat
+                    ? 'Stored securely; enter a new PAT to replace it'
+                    : 'Paste PAT (Code: Read; Pull Request: Read)'
               }
             />
           </label>
         </div>
         <p className="muted small">
           Identity marks and filters your pull requests for this profile. The PAT is encrypted and
-          stored only for this repository profile; leave it blank when editing to keep the stored
-          PAT. Repository details become fixed after pull requests are stored, keeping review
-          history attached to the right repository.
+          stored separately for each repository profile. When adding a repository, reuse a saved PAT
+          or enter a new one. Reusing copies the PAT; later changes to either profile do not affect
+          the other. Leave it blank when editing to keep the stored PAT. Repository details become
+          fixed after pull requests are stored, keeping review history attached to the right
+          repository.
         </p>
         <div className="row repository-profile-editor-actions">
           <button
