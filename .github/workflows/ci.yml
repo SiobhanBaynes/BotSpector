@@ -27,73 +27,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: windows-latest
+            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup
-      - name: Package macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$(uname -m)" == "arm64" ]]; then
-            npm run package -- --mac --arm64
-          else
-            npm run package -- --mac --x64
-          fi
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Package Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          npm run package -- --win --x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Smoke test macOS package
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          executable="$(find dist -path '*/BotSpector.app/Contents/MacOS/BotSpector' -type f -print -quit)"
-          if [[ -z "$executable" ]]; then
-            echo 'Packaged BotSpector executable was not found.' >&2
-            exit 1
-          fi
-          BOTSPECTOR_EXECUTABLE="$PWD/$executable" npm run test:smoke
-        env:
-          CI: 'true'
-      - name: Smoke test Windows package
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $executable = Get-ChildItem -Path dist -Filter BotSpector.exe -Recurse |
-            Where-Object { $_.FullName -match 'win-unpacked' } |
-            Select-Object -First 1
-          if (-not $executable) { throw 'Packaged BotSpector executable was not found.' }
-          $env:BOTSPECTOR_EXECUTABLE = $executable.FullName
-          npm run test:smoke
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        env:
-          CI: 'true'
-      - name: Upload smoke test results
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: ./.github/actions/package-unsigned
         with:
-          name: smoke-${{ matrix.os }}
-          path: |
-            test-results/
-            playwright-report/
-          if-no-files-found: error
-      - name: Upload unsigned installers
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: unsigned-${{ matrix.os }}
-          path: |
-            dist/*.dmg
-            dist/*.exe
-            dist/*.zip
-            dist/*.blockmap
-          if-no-files-found: error
+          arch: ${{ matrix.arch }}

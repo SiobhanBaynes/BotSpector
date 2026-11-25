@@ -58,12 +58,24 @@ test results, coverage, and installers as workflow artifacts.
 and resolved review conversations. New commits dismiss stale approvals. Administrators
 cannot bypass protection, and force pushes and branch deletion are blocked.
 
-Signed releases run for `v*` tags. The tag must match `package.json` and point to a commit
+Releases run for `v*` tags. The tag must match `package.json` and point to a commit
 already on `main`. All quality gates run again before macOS x64/arm64 and Windows x64
-packages are signed, verified, smoke-tested, and uploaded as workflow artifacts.
-This does not automatically publish a GitHub Release.
+packages are built, smoke-tested, and uploaded as workflow artifacts.
+Automatic publishing by electron-builder is disabled. This does not automatically
+publish a GitHub Release.
 
-Before releasing, add these secrets to the GitHub **release** environment under
+Unsigned releases are enabled by setting the repository variable
+`RELEASE_SIGNING_ENABLED` to `false` under **Settings → Secrets and variables →
+Actions → Variables**. These builds need no signing certificates or secrets.
+Download the `BotSpector-unsigned-*` artifacts from the completed **Release** run.
+macOS Gatekeeper may block the app because it is not signed or notarized, and Windows
+may show an unknown-publisher or SmartScreen warning. Only run builds you trust.
+
+You can also select **Actions → Release → Run workflow** to build and test unsigned
+installers without creating a version tag. Manual runs always produce unsigned
+artifacts; they do not execute signing jobs or require the release environment.
+
+To enable signed tag releases later, add these secrets to the GitHub **release** environment under
 **Settings → Environments → release**:
 
 - `MAC_CERTIFICATE_BASE64`: base64-encoded Developer ID Application P12.
@@ -73,8 +85,11 @@ Before releasing, add these secrets to the GitHub **release** environment under
 - `WINDOWS_CERTIFICATE_BASE64`: base64-encoded Windows code-signing PFX.
 - `WINDOWS_CERTIFICATE_PASSWORD`: password for that PFX.
 
-Signing secrets are never used by PR workflows. Missing credentials, invalid signatures,
-or failed notarization stop the release; there is no unsigned release fallback.
+Then set the repository variable `RELEASE_SIGNING_ENABLED` to `true`.
+Signing secrets are never used by PR workflows or unsigned release jobs.
+Missing credentials, invalid signatures, or failed notarization stop a signed release;
+there is no automatic unsigned fallback when signing is enabled.
+Tag releases fail if the variable is missing or is not exactly `true` or `false`.
 The release environment accepts only `v*` tags. Certificates and keys from Azure secure
 files must be reconfigured manually; do not commit them or paste them into PRs.
 
