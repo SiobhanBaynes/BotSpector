@@ -1,0 +1,68 @@
+name: Package and smoke test unsigned application
+description: Build unsigned installers without automatic publishing, then test the packaged app.
+inputs:
+  arch:
+    description: Target architecture
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Package macOS
+      if: runner.os == 'macOS'
+      shell: bash
+      run: npm run package -- --mac --${{ inputs.arch }} --publish never
+      env:
+        CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    - name: Package Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        npm run package -- --win --${{ inputs.arch }} --publish never
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      env:
+        CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    - name: Smoke test macOS package
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        executable="$(find dist -path '*/BotSpector.app/Contents/MacOS/BotSpector' -type f -print -quit)"
+        if [[ -z "$executable" ]]; then
+          echo 'Packaged BotSpector executable was not found.' >&2
+          exit 1
+        fi
+        BOTSPECTOR_EXECUTABLE="$PWD/$executable" npm run test:smoke
+      env:
+        CI: 'true'
+    - name: Smoke test Windows package
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $executable = Get-ChildItem -Path dist -Filter BotSpector.exe -Recurse |
+          Where-Object { $_.FullName -match 'win-unpacked' } |
+          Select-Object -First 1
+        if (-not $executable) { throw 'Packaged BotSpector executable was not found.' }
+        $env:BOTSPECTOR_EXECUTABLE = $executable.FullName
+        npm run test:smoke
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      env:
+        CI: 'true'
+    - name: Upload smoke test results
+      if: always()
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: smoke-${{ runner.os }}-${{ inputs.arch }}
+        path: |
+          test-results/
+          playwright-report/
+        if-no-files-found: error
+    - name: Upload unsigned installers
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: BotSpector-unsigned-${{ runner.os }}-${{ inputs.arch }}
+        path: |
+          dist/*.dmg
+          dist/*.exe
+          dist/*.zip
+          dist/*.blockmap
+        if-no-files-found: error

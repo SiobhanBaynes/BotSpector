@@ -2,6 +2,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,9 +20,31 @@ jobs:
   quality:
     uses: ./.github/workflows/quality.yml
     with:
-      release: true
+      release: ${{ github.event_name == 'push' }}
+  unsigned:
+    name: Package unsigned release (${{ matrix.os }}, ${{ matrix.arch }})
+    if: github.event_name == 'workflow_dispatch' || vars.RELEASE_SIGNING_ENABLED == 'false'
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x64
+          - os: macos-latest
+            arch: arm64
+          - os: windows-latest
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/package-unsigned
+        with:
+          arch: ${{ matrix.arch }}
   macos:
     name: Sign and package macOS (${{ matrix.arch }})
+    if: github.event_name == 'push' && vars.RELEASE_SIGNING_ENABLED == 'true'
     needs: quality
     environment: release
     strategy:
@@ -51,7 +74,7 @@ jobs:
           CSC_LINK: ${{ runner.temp }}/BotSpector-macOS.p12
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey_BotSpector.p8
       - name: Sign, notarize, and package
-        run: npm run package:release -- --mac --${{ matrix.arch }}
+        run: npm run package:release -- --mac --${{ matrix.arch }} --publish never
         env:
           CSC_LINK: ${{ runner.temp }}/BotSpector-macOS.p12
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
@@ -95,6 +118,7 @@ jobs:
           if-no-files-found: error
   windows:
     name: Sign and package Windows x64
+    if: github.event_name == 'push' && vars.RELEASE_SIGNING_ENABLED == 'true'
     needs: quality
     environment: release
     runs-on: windows-latest
@@ -114,7 +138,7 @@ jobs:
       - name: Sign and package
         shell: pwsh
         run: |
-          npm run package:release -- --win --x64
+          npm run package:release -- --win --x64 --publish never
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
           CSC_LINK: ${{ runner.temp }}/BotSpector-Windows.pfx

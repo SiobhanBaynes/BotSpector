@@ -30,6 +30,12 @@ jobs:
           set -euo pipefail
           npm run release:verify-tag -- "$GITHUB_REF"
           git merge-base --is-ancestor HEAD origin/main
+          case "$RELEASE_SIGNING_ENABLED" in
+            true|false) ;;
+            *) echo 'Set the repository variable RELEASE_SIGNING_ENABLED to true or false.' >&2; exit 1 ;;
+          esac
+        env:
+          RELEASE_SIGNING_ENABLED: ${{ vars.RELEASE_SIGNING_ENABLED }}
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
