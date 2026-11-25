@@ -1,5 +1,9 @@
 # Azure Pipelines
 
+These pipelines remain available for the Azure repository. The GitHub repository
+uses GitHub Actions instead; see [CI and releases](../README.md#ci-and-releases).
+Azure signing resources and policies are not shared with GitHub.
+
 `ci-pr.yml` enforces formatting, linting, type safety, unit coverage, dependency
 auditing, secret scanning, and a production build. It then packages and launches
 the unsigned application on hosted macOS and Windows agents and publishes the
