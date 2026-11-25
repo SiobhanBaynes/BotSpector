@@ -30,7 +30,7 @@ jobs:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup
       - name: Package macOS
         if: runner.os == 'macOS'
@@ -80,7 +80,7 @@ jobs:
           CI: 'true'
       - name: Upload smoke test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: smoke-${{ matrix.os }}
           path: |
@@ -88,7 +88,7 @@ jobs:
             playwright-report/
           if-no-files-found: error
       - name: Upload unsigned installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: unsigned-${{ matrix.os }}
           path: |

@@ -34,7 +34,7 @@ jobs:
             runner: macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup
       - name: Prepare signing material
         shell: bash
@@ -79,13 +79,13 @@ jobs:
         run: rm -f "$RUNNER_TEMP/BotSpector-macOS.p12" "$RUNNER_TEMP/AuthKey_BotSpector.p8"
       - name: Upload smoke test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-smoke-macos-${{ matrix.arch }}
           path: test-results/
           if-no-files-found: error
       - name: Upload signed installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: BotSpector-macOS-${{ matrix.arch }}
           path: |
@@ -99,7 +99,7 @@ jobs:
     environment: release
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: ./.github/actions/setup
       - name: Prepare signing certificate
         shell: pwsh
@@ -147,13 +147,13 @@ jobs:
           if (Test-Path $certificate) { Remove-Item -LiteralPath $certificate }
       - name: Upload smoke test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-smoke-windows-x64
           path: test-results/
           if-no-files-found: error
       - name: Upload signed installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: BotSpector-Windows-x64
           path: |

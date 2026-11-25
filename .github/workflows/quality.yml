@@ -19,7 +19,7 @@ jobs:
     name: Test and analyze
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
@@ -37,7 +37,7 @@ jobs:
         run: npm run test:coverage -- --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-junit.xml
       - name: Upload unit results and coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: unit-results
           path: |
