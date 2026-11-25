@@ -116,6 +116,58 @@ jobs:
             dist/*.zip
             dist/*.blockmap
           if-no-files-found: error
+  publish:
+    name: Publish GitHub Release
+    needs: [quality, unsigned, macos, windows]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' &&
+          needs.quality.result == 'success' &&
+          ((vars.RELEASE_SIGNING_ENABLED == 'false' && needs.unsigned.result == 'success') ||
+           (vars.RELEASE_SIGNING_ENABLED == 'true' &&
+            needs.macos.result == 'success' && needs.windows.result == 'success')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested installers
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: ${{ vars.RELEASE_SIGNING_ENABLED == 'false' && 'BotSpector-unsigned-*' || 'BotSpector-*' }}
+          path: installers
+          merge-multiple: true
+      - name: Publish installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(installers/*.dmg)
+          zips=(installers/*.zip)
+          exes=(installers/*.exe)
+          if (( ${#dmgs[@]} != 2 || ${#zips[@]} != 2 || ${#exes[@]} != 1 )); then
+            echo 'Expected Intel and Apple Silicon macOS DMG/ZIP installers and one Windows installer.' >&2
+            exit 1
+          fi
+          files=("${dmgs[@]}" "${zips[@]}" "${exes[@]}" installers/*.blockmap)
+          for file in "${files[@]}"; do
+            if [[ ! -s "$file" ]]; then
+              echo "Installer asset is empty: $file" >&2
+              exit 1
+            fi
+          done
+          title="BotSpector $RELEASE_TAG"
+          notes="Installers for macOS (Intel and Apple Silicon) and Windows x64."
+          if [[ "$SIGNING_ENABLED" == 'false' ]]; then
+            title="$title (unsigned)"
+            notes="$notes"$'\n\n'"These builds are not signed or notarized. macOS Gatekeeper and Windows SmartScreen may block them or show security warnings. Only install builds you trust."
+          fi
+          notes="$notes"$'\n\n'"Build and test results: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --draft --title "$title" --notes "$notes"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SIGNING_ENABLED: ${{ vars.RELEASE_SIGNING_ENABLED }}
   windows:
     name: Sign and package Windows x64
     if: github.event_name == 'push' && vars.RELEASE_SIGNING_ENABLED == 'true'

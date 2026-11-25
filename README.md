@@ -61,19 +61,23 @@ cannot bypass protection, and force pushes and branch deletion are blocked.
 Releases run for `v*` tags. The tag must match `package.json` and point to a commit
 already on `main`. All quality gates run again before macOS x64/arm64 and Windows x64
 packages are built, smoke-tested, and uploaded as workflow artifacts.
-Automatic publishing by electron-builder is disabled. This does not automatically
-publish a GitHub Release.
+After all platform builds pass, their installers and blockmaps are attached to a
+GitHub Release for that tag. The release stays a draft until every asset upload
+finishes. Only this publishing job has repository write permission.
+Automatic publishing by electron-builder remains disabled.
 
 Unsigned releases are enabled by setting the repository variable
 `RELEASE_SIGNING_ENABLED` to `false` under **Settings → Secrets and variables →
 Actions → Variables**. These builds need no signing certificates or secrets.
-Download the `BotSpector-unsigned-*` artifacts from the completed **Release** run.
+Download installers from the repository's **Releases** page. Unsigned releases are
+labelled **unsigned** and include a security warning.
 macOS Gatekeeper may block the app because it is not signed or notarized, and Windows
 may show an unknown-publisher or SmartScreen warning. Only run builds you trust.
 
 You can also select **Actions → Release → Run workflow** to build and test unsigned
 installers without creating a version tag. Manual runs always produce unsigned
-artifacts; they do not execute signing jobs or require the release environment.
+`BotSpector-unsigned-*` workflow artifacts; they do not publish a GitHub Release,
+execute signing jobs, or require the release environment.
 
 To enable signed tag releases later, add these secrets to the GitHub **release** environment under
 **Settings → Environments → release**:
