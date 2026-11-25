@@ -1,0 +1,163 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BOTSPECTOR_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+  BUILD_BUILDID: ${{ github.run_id }}
+  BOTSPECTOR_SOURCE_COMMIT: ${{ github.sha }}
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+    with:
+      release: true
+  macos:
+    name: Sign and package macOS (${{ matrix.arch }})
+    needs: quality
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Prepare signing material
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "for (const name of ['MAC_CERTIFICATE_BASE64', 'CSC_KEY_PASSWORD', 'APPLE_API_KEY_BASE64', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER']) { if (!process.env[name]) throw new Error('Missing release secret: ' + name) }"
+          node -e "require('node:fs').writeFileSync(process.env.CSC_LINK, Buffer.from(process.env.MAC_CERTIFICATE_BASE64, 'base64'), { mode: 0o600 }); require('node:fs').writeFileSync(process.env.APPLE_API_KEY, Buffer.from(process.env.APPLE_API_KEY_BASE64, 'base64'), { mode: 0o600 })"
+        env:
+          MAC_CERTIFICATE_BASE64: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_LINK: ${{ runner.temp }}/BotSpector-macOS.p12
+          APPLE_API_KEY: ${{ runner.temp }}/AuthKey_BotSpector.p8
+      - name: Sign, notarize, and package
+        run: npm run package:release -- --mac --${{ matrix.arch }}
+        env:
+          CSC_LINK: ${{ runner.temp }}/BotSpector-macOS.p12
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/AuthKey_BotSpector.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Verify signature and notarization, then smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find dist -path '*/BotSpector.app' -type d -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo 'Packaged BotSpector application was not found.' >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=2 "$app_path"
+          BOTSPECTOR_EXECUTABLE="$PWD/$app_path/Contents/MacOS/BotSpector" npm run test:smoke
+        env:
+          CI: 'true'
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/BotSpector-macOS.p12" "$RUNNER_TEMP/AuthKey_BotSpector.p8"
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-macos-${{ matrix.arch }}
+          path: test-results/
+          if-no-files-found: error
+      - name: Upload signed installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: BotSpector-macOS-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+          if-no-files-found: error
+  windows:
+    name: Sign and package Windows x64
+    needs: quality
+    environment: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Prepare signing certificate
+        shell: pwsh
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE_BASE64) { throw 'Missing release secret: WINDOWS_CERTIFICATE_BASE64' }
+          if (-not $env:CSC_KEY_PASSWORD) { throw 'Missing release secret: WINDOWS_CERTIFICATE_PASSWORD' }
+          [IO.File]::WriteAllBytes($env:CSC_LINK, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CSC_LINK: ${{ runner.temp }}/BotSpector-Windows.pfx
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Sign and package
+        shell: pwsh
+        run: |
+          npm run package:release -- --win --x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        env:
+          CSC_LINK: ${{ runner.temp }}/BotSpector-Windows.pfx
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Verify signatures and smoke test
+        shell: pwsh
+        run: |
+          $application = Get-ChildItem -Path dist -Filter BotSpector.exe -Recurse |
+            Where-Object { $_.FullName -match 'win-unpacked' } |
+            Select-Object -First 1
+          if (-not $application) { throw 'Packaged BotSpector application was not found.' }
+          $installers = Get-ChildItem -Path dist -Filter *.exe -File
+          if (-not $installers) { throw 'BotSpector installer was not found.' }
+          @($application) + @($installers) | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature on $($_.Name): $($signature.Status)"
+            }
+          }
+          $env:BOTSPECTOR_EXECUTABLE = $application.FullName
+          npm run test:smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        env:
+          CI: 'true'
+      - name: Remove signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP 'BotSpector-Windows.pfx'
+          if (Test-Path $certificate) { Remove-Item -LiteralPath $certificate }
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-windows-x64
+          path: test-results/
+          if-no-files-found: error
+      - name: Upload signed installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: BotSpector-Windows-x64
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.blockmap
+          if-no-files-found: error

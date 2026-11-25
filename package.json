@@ -58,7 +58,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "security:dependencies": "npm audit --audit-level=high",
-    "security:secrets": "secretlint \"**/*\" \".azdo/**/*\"",
+    "security:secrets": "secretlint \"**/*\" \".azdo/**/*\" \".github/**/*\"",
     "security": "npm run security:dependencies && npm run security:secrets",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",

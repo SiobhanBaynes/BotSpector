@@ -42,9 +42,53 @@ npm run typecheck     # check main, renderer, and test TypeScript
 ## Build identity
 
 Every app bundle embeds the version from `package.json`, its source commit, and its UTC build time.
-Azure Pipelines builds also include the pipeline build number and ID. Local builds use a timestamped
+GitHub Actions builds include the workflow run number, attempt, and ID. Azure Pipelines builds
+retain their pipeline build number and ID. Local builds use a timestamped
 `local-*` build number and show `*` beside the commit when the working tree was dirty. The compact
 version is always visible in the sidebar, with complete details under **Settings → Diagnostics**.
+
+## CI and releases
+
+GitHub Actions runs formatting, linting, typechecks, unit coverage, dependency auditing,
+secret scanning, and a production build on pull requests to `main` and pushes to `main`.
+It also packages and smoke-tests unsigned macOS and Windows applications and uploads
+test results, coverage, and installers as workflow artifacts.
+
+`main` requires all three CI checks, one approval from someone other than the author,
+and resolved review conversations. New commits dismiss stale approvals. Administrators
+cannot bypass protection, and force pushes and branch deletion are blocked.
+
+Signed releases run for `v*` tags. The tag must match `package.json` and point to a commit
+already on `main`. All quality gates run again before macOS x64/arm64 and Windows x64
+packages are signed, verified, smoke-tested, and uploaded as workflow artifacts.
+This does not automatically publish a GitHub Release.
+
+Before releasing, add these secrets to the GitHub **release** environment under
+**Settings → Environments → release**:
+
+- `MAC_CERTIFICATE_BASE64`: base64-encoded Developer ID Application P12.
+- `MAC_CERTIFICATE_PASSWORD`: password for that P12.
+- `APPLE_API_KEY_BASE64`: base64-encoded App Store Connect P8 key.
+- `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`: the notarization key ID and issuer.
+- `WINDOWS_CERTIFICATE_BASE64`: base64-encoded Windows code-signing PFX.
+- `WINDOWS_CERTIFICATE_PASSWORD`: password for that PFX.
+
+Signing secrets are never used by PR workflows. Missing credentials, invalid signatures,
+or failed notarization stop the release; there is no unsigned release fallback.
+The release environment accepts only `v*` tags. Certificates and keys from Azure secure
+files must be reconfigured manually; do not commit them or paste them into PRs.
+
+Merge a version change through a PR, then tag the tested `main` commit:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git tag v0.1.0  # must match the version in package.json
+git push origin v0.1.0
+```
+
+The files under `.azdo/` are retained for the existing Azure repository, not executed
+by GitHub Actions. Azure PRs, branch policies, and secure files remain in Azure.
 
 ## First-time setup (in the app)
 
