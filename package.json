@@ -1,6 +1,6 @@
 {
   "name": "botspector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "BotSpector — a quirky desktop sidekick that snoops through your Azure DevOps pull requests with a GitHub Copilot-powered agent.",
   "main": "./out/main/index.js",
   "author": "GCAP",
