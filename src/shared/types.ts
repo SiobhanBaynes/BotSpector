@@ -41,6 +41,7 @@ export interface RepositoryProfileInput {
   myIdentity: string
   localCheckoutPath?: string
   pat?: string
+  patSourceProfileId?: string
 }
 
 export interface Settings {

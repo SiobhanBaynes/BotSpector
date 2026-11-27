@@ -320,8 +320,19 @@ export function registerIpcHandlers(): void {
       input: RepositoryProfileInput
     ): Promise<IpcResult<Settings>> => {
       try {
-        const pat = typeof input.pat === 'string' ? input.pat.trim() : ''
-        if (pat) secrets.assertSecureStorageAvailable()
+        let pat = typeof input.pat === 'string' ? input.pat.trim() : ''
+        const patSourceProfileId = input.patSourceProfileId?.trim()
+        if (pat && patSourceProfileId) {
+          throw new Error('Choose an existing PAT or enter a new PAT, not both.')
+        }
+        if (pat || patSourceProfileId) secrets.assertSecureStorageAvailable()
+        if (patSourceProfileId) {
+          if (!repo.listRepositoryProfiles().some((profile) => profile.id === patSourceProfileId)) {
+            throw new Error('The repository profile selected for PAT reuse no longer exists.')
+          }
+          pat = secrets.getAdoPat(patSourceProfileId) ?? ''
+          if (!pat) throw new Error('The selected repository profile has no available PAT to copy.')
+        }
         const localCheckoutPath = input.localCheckoutPath?.trim()
         const normalizedCheckout = localCheckoutPath
           ? await validateRepositoryCheckout(localCheckoutPath, input)
